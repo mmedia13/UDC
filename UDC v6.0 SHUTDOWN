@@ -1,5 +1,5 @@
 #!/bin/bash
-#v6.0 (w/shutdown)
+#v6.0 (w/ShutDown)
 
 # Set log file paths
 LOGFILE="/home/logs/UDC/UpdateNClean.log-$(date +%m.%d.%y)"
@@ -278,6 +278,24 @@ update_technitium_dns() {
     check_exit_status
 }
 
+# Function to compare the script body with the file body
+compare_script_with_file() {
+    script_body=$(cat "$0")
+    file_body=$(curl -sSL https://raw.githubusercontent.com/mmedia13/UDC/main/UDC%20v6.0%20SHUTDOWN)
+
+    if [[ "$script_body" == "$file_body" ]]; then
+        echo "Script and file bodies are the same. No action required."
+    else
+        echo "Script and file bodies are different. Replacing the script with the file version and restarting."
+        echo "$file_body" > "$0"
+        exec "$0" "$@"  # Restart the script with the updated version
+        exit 0
+    fi
+}
+
+# Compare the script body with the file body
+compare_script_with_file
+
 # Main script execution
 {
     echo
@@ -313,4 +331,7 @@ update_technitium_dns() {
     echo "          *fin*            "
     echo "---------------------------"
     echo
+
+    sudo shutdown now  # Shut down the computer
+    exit 0
 } 2>> "$ERRORLOG"
