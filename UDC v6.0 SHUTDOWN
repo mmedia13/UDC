@@ -1,5 +1,3 @@
-Modify the following script to shutdown after script is complete
-
 #!/bin/bash
 
 # Set log file paths
@@ -294,6 +292,7 @@ leave() {
     echo "          *fin*            "
     echo "---------------------------"
     echo
+    sudo shutdown now  # Shut down the computer
     exit 0
 }
 
