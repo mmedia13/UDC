@@ -25,6 +25,91 @@ check_exit_status() {
     fi
 }
 
+# Function to perform the update process
+update() {
+    echo
+    echo "** Update Time and Date **"
+    echo "$(date "+%T") : - Update Time and Date" >> "$LOGFILE" 2>&1
+    sudo ntpdate pool.ntp.org
+    check_exit_status
+    echo
+    echo "** Update package lists for upgrades **"
+    echo "$(date "+%T") : - Update package lists for upgrades" >> "$LOGFILE" 2>&1
+    sudo apt-get update
+    check_exit_status
+    echo
+    echo "** Upgrade System to new release (if Available) **"
+    echo "$(date "+%T") : - Upgrade System to new release (if Available)" >> "$LOGFILE" 2>&1
+    sudo do-release-upgrade -f DistUpgradeViewNonInteractive >> "$LOGFILE" 2>&1
+    check_exit_status
+    echo
+    echo "** Updates packages and libraries **"
+    echo "$(date "+%T") : - Updates packages and libraries" >> "$LOGFILE" 2>&1
+    sudo apt full-upgrade -y
+    check_exit_status
+    echo
+    echo "** Download and install packages as well as remove obsolete packages **"
+    echo "$(date "+%T") : - Download and install packages as well as remove obsolete packages" >> "$LOGFILE" 2>&1
+    sudo apt-get dist-upgrade -y
+    check_exit_status
+    echo
+    echo "** Update Firefox Browser **"
+    echo "$(date "+%T") : - Update Firefox Browser" >> "$LOGFILE" 2>&1
+    sudo apt install firefox -y
+    check_exit_status
+    echo
+    echo "** Finish configuration of partially installed packages **"
+    echo "$(date "+%T") : - Finish configuration of partially installed packages" >> "$LOGFILE" 2>&1
+    yes | sudo dpkg --configure -a
+    check_exit_status
+    echo
+    echo "** Update ClamAV (if necessary) **"
+    echo "$(date "+%T") : - Update ClamAV (if necessary)" >> "$LOGFILE" 2>&1
+    # Check if ClamAV is installed
+    if ! command -v clamscan &>/dev/null; then
+        echo "ClamAV is not installed. Please install ClamAV first."
+        exit 1
+    fi
+
+    # Get the current installed version of ClamAV
+    current_version=$(clamscan --version | awk '{print $NF}')
+
+    # Get the latest version available
+    latest_version=$(wget -qO- https://www.clamav.net/downloads | grep -Eo 'ClamAV [0-9]+\.[0-9]+\.[0-9]+' | awk '{print $NF}')
+
+    echo "Current version: $current_version"
+    echo "Latest version: $latest_version"
+
+    # Compare versions
+    if [[ $current_version == $latest_version ]]; then
+        echo "ClamAV is already up to date."
+    else
+        echo "Updating ClamAV to the latest version..."
+        sudo apt-get update
+        sudo apt-get install --only-upgrade clamav -y
+        echo "ClamAV has been updated to the latest version."
+    fi
+
+    check_exit_status
+    echo
+    echo "** Update virus database **"
+    echo "$(date "+%T") : - Update virus database" >> "$LOGFILE" 2>&1
+    sudo /etc/init.d/clamav-freshclam stop
+    sudo freshclam
+    check_exit_status
+    sudo /etc/init.d/clamav-freshclam start
+    echo
+    echo "** Update RKhunter **"
+    echo "$(date "+%T") : - Update RKhunter" >> "$LOGFILE" 2>&1
+    sudo rkhunter --update
+    check_exit_status
+    echo
+    echo "** Update RKhunter database **"
+    echo "$(date "+%T") : - Update RKhunter Database" >> "$LOGFILE" 2>&1
+    sudo rkhunter --propupd
+    check_exit_status
+}
+
 # Function to perform housekeeping tasks
 housekeeping() {
     echo
@@ -56,7 +141,7 @@ housekeeping() {
     done
 
     # Build the list of kernel packages to purge
-    CANDIDATES=$(ls -tr /boot/vmlinuz-* | head -n -$KEEP | grep -v "$(uname -r)$" | cut -d- -f2- | awk '{print "linux-image-" $0 " linux-headers-" $0}')
+    CANDIDATES=$(ls -tr /boot/vmlinuz-* | head -n -${KEEP} | grep -v "$(uname -r)$" | cut -d- -f2- | awk '{print "linux-image-" $0 " linux-headers-" $0}')
     PURGE=""
     for c in $CANDIDATES; do
         dpkg-query -s "$c" >/dev/null 2>&1 && PURGE="$PURGE $c"
@@ -128,6 +213,48 @@ housekeeping() {
     echo "$(date "+%T") : - Update & Clean v6.0 Script Complete" >> "$LOGFILE" 2>&1
 }
 
+reboot() {
+    if [ -f /var/run/reboot-required ]; then
+        echo "$(date "+%T") : - Maintenance reboot needed, rebooting in 5 minutes" >> "$LOGFILE" 2>&1
+        sudo shutdown -r +5 "Will REBOOT IN 5 due to routine Maintenance"
+        check_exit_status
+    fi
+}
+
+leave() {
+    echo "$(date "+%m/%d/%Y @ %T") : ******** Update & Clean Script Completed! ********" >> "$LOGFILE"
+    echo
+    echo "---------------------------"
+    echo "          *fin*            "
+    echo "---------------------------"
+    echo
+    exit 0
+}
+
+# Function to compare script bodies
+compare_script_bodies() {
+    local script_body=$(cat "$0")
+    local file_body=""
+    local file_url="https://raw.githubusercontent.com/mmedia13/UDC/main/UDC%20v6.0%20(plex)"
+
+    file_body=$(curl -s "$file_url")
+
+    if [[ -z "$file_body" ]]; then
+        echo "$(date "+%T") : - Failed to retrieve the file from $file_url" >> "$LOGFILE" 2>&1
+        log_error "Failed to retrieve the file from $file_url"
+        return 1
+    fi
+
+    if [[ "$script_body" == "$file_body" ]]; then
+        echo "The script body in the file is the same as the running script. No action needed."
+    else
+        echo "The script body in the file is different from the running script. Replacing the running script with the file version..."
+        echo "$file_body" >"$0"
+        echo "Script replaced."
+        exit 0
+    fi
+}
+
 # Main script execution
 {
     echo
@@ -139,28 +266,6 @@ housekeeping() {
     echo
 
     # Function to compare script bodies
-    compare_script_bodies() {
-        local script_body="$(cat "$0")"
-        local file_body=""
-        local file_url="https://github.com/mmedia13/UDC/blob/main/UDC%20v6.0%20(plex)"
-        file_body="$(wget -qO- "$file_url")"
-
-        if [[ -z "$file_body" ]]; then
-            echo "$(date "+%T") : - Failed to retrieve the file from $file_url" >> "$LOGFILE" 2>&1
-            log_error "Failed to retrieve the file from $file_url"
-            return 1
-        fi
-
-        if [[ "$script_body" == "$file_body" ]]; then
-            echo "The script body in the file is the same as the running script. No action needed."
-        else
-            echo "The script body in the file is different from the running script. Replacing the running script with the file version..."
-            echo "$file_body" > "$0"
-            echo "Script replaced."
-            exit 0
-        fi
-    }
-
     compare_script_bodies
     check_exit_status
 
