@@ -1,5 +1,5 @@
 #!/bin/bash
-
+#v6.0 plex
 # Set log file paths
 LOGFILE="/home/logs/UDC/UpdateNClean.log-$(date +%m.%d.%y)"
 LOGFILE2="/home/logs/rkhunter/RKhunter.log-$(date +%m.%d.%y)"
@@ -269,7 +269,7 @@ leave() {
     housekeeping
     reboot
     leave
-
+make this change in your script
     echo "$(date "+%m/%d/%Y @ %T") : ******** Update & Clean Script Completed! ********" >> "$LOGFILE"
     echo
     echo "---------------------------"
