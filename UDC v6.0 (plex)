@@ -1,4 +1,5 @@
 #!/bin/bash
+#v6.0 (Plex)
 
 # Set log file paths
 LOGFILE="/home/logs/UDC/UpdateNClean.log-$(date +%m.%d.%y)"
