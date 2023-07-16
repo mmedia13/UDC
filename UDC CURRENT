@@ -209,8 +209,8 @@ housekeeping() {
     sudo updatedb
     check_exit_status
     echo
-    echo "** Update & Clean v6.0 Complete **"
-    echo "$(date "+%T") : - Update & Clean v6.0 Script Complete" >> "$LOGFILE" 2>&1
+    echo "** Update & Clean v5.9 Complete **"
+    echo "$(date "+%T") : - Update & Clean v5.9 Script Complete" >> "$LOGFILE" 2>&1
 }
 
 # Function to update Pi-hole
@@ -292,7 +292,6 @@ leave() {
     echo "          *fin*            "
     echo "---------------------------"
     echo
-    sudo shutdown now  # Shut down the computer
     exit 0
 }
 
@@ -300,7 +299,7 @@ leave() {
 {
     echo
     echo "==========================================="
-    echo "       -:: Update & Clean v6.0 ::-"
+    echo "       -:: Update & Clean v5.9 ::-"
     echo "==========================================="
     echo
     echo "$(date "+%m/%d/%Y @ %T") : ******** Update & Clean Script Started! ********" >> "$LOGFILE"
@@ -310,7 +309,7 @@ leave() {
     compare_script_bodies() {
         local script_body="$(cat "$0")"
         local file_body=""
-        local file_url="https://github.com/mmedia13/UDC/blob/main/UDC%20v6.0%20SHUTDOWN"
+        local file_url="https://github.com/mmedia13/UDC/raw/main/UDC%20CURRENT"
         file_body="$(wget -qO- "$file_url")"
 
         if [[ -z "$file_body" ]]; then
