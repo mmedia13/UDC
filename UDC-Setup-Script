@@ -1,0 +1,65 @@
+#!/bin/bash
+
+# Set log file paths
+LOGDIR="/home/logs/UDC"
+LOGFILE="$LOGDIR/UDC-create.log-$(date +%m.%d.%y_%H.%M.%S)"
+ERRORLOG="$LOGDIR/UDC-ERRORS.log-$(date +%m.%d.%y_%H.%M.%S)"
+
+# Function to log success messages
+log_success() {
+    echo "[SUCCESS] $(date '+%T'): $1" >> "$LOGFILE"
+}
+
+# Function to log error messages
+log_error() {
+    echo "[ERROR] $(date '+%T'): $1" >> "$ERRORLOG"
+}
+
+# Create log directories
+sudo mkdir -p /home/logs/UDC/UDC-ERRORS
+sudo mkdir -p /home/logs/rkhunter
+sudo mkdir -p /home/logs/clamav
+
+# Log directory creation success
+log_success "Log directories created successfully."
+
+# Update package lists
+sudo apt-get update >> "$LOGFILE" 2>> "$ERRORLOG" || { log_error "Failed to update package lists"; exit 1; }
+log_success "Package lists updated successfully."
+
+# Upgrade packages
+sudo apt-get upgrade -y >> "$LOGFILE" 2>> "$ERRORLOG" || { log_error "Failed to upgrade packages"; exit 1; }
+log_success "Packages upgraded successfully."
+
+# Install required packages
+sudo apt-get install -y clamav curl deborphan ntpdate rkhunter >> "$LOGFILE" 2>> "$ERRORLOG" || { log_error "Failed to install required packages"; exit 1; }
+log_success "Required packages installed successfully."
+
+# Alter /etc/rkhunter.conf
+sudo sed -i 's/^UPDATE_MIRRORS=.*/UPDATE_MIRRORS=1/' /etc/rkhunter.conf
+sudo sed -i 's/^MIRRORS_MODE=.*/MIRRORS_MODE=0/' /etc/rkhunter.conf
+sudo sed -i 's/^LOGFILE=.*/LOGFILE="\/home\/logs\/rkhunter\/rkhunter.log-$(date +%m.%d.%y)"/' /etc/rkhunter.conf
+sudo sed -i 's/^WEB_CMD=.*/WEB_CMD=""/' /etc/rkhunter.conf
+log_success "Altered /etc/rkhunter.conf successfully."
+
+# Create UpdateandClean script
+curl -sSf "https://github.com/mmedia13/UDC/raw/main/UDC%20CURRENT" | sudo tee /bin/UpdateandClean > /dev/null
+sudo chmod a+x /bin/UpdateandClean
+sudo ls -lah /bin/UpdateandClean >> "$LOGFILE" 2>> "$ERRORLOG" || { log_error "Failed to set permissions for UpdateandClean script"; exit 1; }
+log_success "UpdateandClean script created and permissions set successfully."
+
+# Create cron job to run UpdateandClean script
+(crontab -l 2>/dev/null; echo "15 3 * * * /bin/UpdateandClean") | crontab -
+log_success "Cron job created successfully."
+
+# Execute UpdateandClean script
+log_success "Executing UpdateandClean script..."
+/bin/UpdateandClean >> "$LOGFILE" 2>> "$ERRORLOG" || { log_error "Failed to execute UpdateandClean script"; exit 1; }
+log_success "UpdateandClean script executed successfully."
+
+# Log execution completed
+echo "-------------------------------------" >> "$LOGFILE"
+echo "Execution completed at: $(date)" >> "$LOGFILE"
+
+# Run the UpdateandClean script
+/bin/UpdateandClean
