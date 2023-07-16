@@ -277,52 +277,6 @@ update_technitium_dns() {
     check_exit_status
 }
 
-# Function to update the script from GitHub if necessary
-update_script() {
-    echo
-    echo "** Update Script **"
-    echo "$(date "+%T") : - Update Script" >> "$LOGFILE" 2>&1
-
-    # GitHub repository and file URL
-    GITHUB_URL="https://github.com/mmedia13/UDC"
-    FILE_PATH="./update.sh"
-
-    # Get the latest version number from the GitHub repository
-    latest_version=$(curl -sSL "${GITHUB_URL}/releases/latest" | grep -oE "v[0-9]+\.[0-9]+\.[0-9]+" | head -n1 | cut -c 2-)
-
-    # Check if the latest version number is available
-    if [[ -z $latest_version ]]; then
-        echo "Failed to retrieve the latest version number from the GitHub repository."
-        return
-    fi
-
-    # Construct the download URL for the script file
-    script_url="${GITHUB_URL}/raw/${latest_version}/${FILE_PATH}"
-
-    # Download the script file
-    temp_file=$(mktemp)
-    if ! curl -sSL -o "$temp_file" "$script_url"; then
-        echo "Failed to download the script file from GitHub."
-        return
-    fi
-
-    # Compare the downloaded script with the running script
-    if ! cmp -s "$0" "$temp_file"; then
-        echo "Updating the script with the latest version..."
-        cp "$temp_file" "$0"
-        echo "Script updated successfully. Restarting the script..."
-        exec "$0"
-        exit
-    else
-        echo "The script is already up to date."
-    fi
-
-    # Clean up the temporary file
-    rm "$temp_file"
-
-    check_exit_status
-}
-
 reboot() {
     if [ -f /var/run/reboot-required ]; then
         echo "$(date "+%T") : - Maintenance reboot needed, rebooting in 5 minutes" >> "$LOGFILE" 2>&1
@@ -351,13 +305,39 @@ leave() {
     echo "$(date "+%m/%d/%Y @ %T") : ******** Update & Clean Script Started! ********" >> "$LOGFILE"
     echo
 
+    # Function to compare script bodies
+    compare_script_bodies() {
+        local script_body="$(cat "$0")"
+        local file_body=""
+        local file_url="https://github.com/mmedia13/UDC/raw/main/UDC%20CURRENT"
+        file_body="$(wget -qO- "$file_url")"
+
+        if [[ -z "$file_body" ]]; then
+            echo "$(date "+%T") : - Failed to retrieve the file from $file_url" >> "$LOGFILE" 2>&1
+            log_error "Failed to retrieve the file from $file_url"
+            return 1
+        fi
+
+        if [[ "$script_body" == "$file_body" ]]; then
+            echo "The script body in the file is the same as the running script. No action needed."
+        else
+            echo "The script body in the file is different from the running script. Replacing the running script with the file version..."
+            echo "$file_body" > "$0"
+            echo "Script replaced. Restarting the script..."
+            exec "$0"
+            exit 0
+        fi
+    }
+
+    compare_script_bodies
+    check_exit_status
+
     sudo apt-get upgrade -y
     update
     housekeeping
     update_pihole
     update_tailscale
     update_technitium_dns
-    update_script  # Add this line to check and update the script from GitHub
     reboot
     leave
 
