@@ -292,6 +292,7 @@ leave() {
     echo "          *fin*            "
     echo "---------------------------"
     echo
+    sudo shutdown now  # Shut down the computer
     exit 0
 }
 
@@ -309,7 +310,7 @@ leave() {
     compare_script_bodies() {
         local script_body="$(cat "$0")"
         local file_body=""
-        local file_url="https://github.com/mmedia13/UDC/raw/main/UDC%20CURRENT"
+        local file_url="https://github.com/mmedia13/UDC/blob/main/UDC%20v6.0%20SHUTDOWN"
         file_body="$(wget -qO- "$file_url")"
 
         if [[ -z "$file_body" ]]; then
