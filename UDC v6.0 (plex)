@@ -1,5 +1,5 @@
 #!/bin/bash
-#v6.0 plex
+# v6.0 plex
 # Set log file paths
 LOGFILE="/home/logs/UDC/UpdateNClean.log-$(date +%m.%d.%y)"
 LOGFILE2="/home/logs/rkhunter/RKhunter.log-$(date +%m.%d.%y)"
