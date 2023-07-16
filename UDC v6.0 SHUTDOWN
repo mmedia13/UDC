@@ -1,4 +1,5 @@
 #!/bin/bash
+#v6.0 (w/shutdown)
 
 # Set log file paths
 LOGFILE="/home/logs/UDC/UpdateNClean.log-$(date +%m.%d.%y)"
@@ -277,25 +278,6 @@ update_technitium_dns() {
     check_exit_status
 }
 
-reboot() {
-    if [ -f /var/run/reboot-required ]; then
-        echo "$(date "+%T") : - Maintenance reboot needed, rebooting in 5 minutes" >> "$LOGFILE" 2>&1
-        sudo shutdown -r +5 "Will REBOOT IN 5 due to routine Maintenance"
-        check_exit_status
-    fi
-}
-
-leave() {
-    echo "$(date "+%m/%d/%Y @ %T") : ******** Update & Clean Script Completed! ********" >> "$LOGFILE"
-    echo
-    echo "---------------------------"
-    echo "          *fin*            "
-    echo "---------------------------"
-    echo
-    sudo shutdown now  # Shut down the computer
-    exit 0
-}
-
 # Main script execution
 {
     echo
@@ -306,41 +288,24 @@ leave() {
     echo "$(date "+%m/%d/%Y @ %T") : ******** Update & Clean Script Started! ********" >> "$LOGFILE"
     echo
 
-    # Function to compare script bodies
-    compare_script_bodies() {
-        local script_body="$(cat "$0")"
-        local file_body=""
-        local file_url="https://github.com/mmedia13/UDC/blob/main/UDC%20v6.0%20SHUTDOWN"
-        file_body="$(wget -qO- "$file_url")"
-
-        if [[ -z "$file_body" ]]; then
-            echo "$(date "+%T") : - Failed to retrieve the file from $file_url" >> "$LOGFILE" 2>&1
-            log_error "Failed to retrieve the file from $file_url"
-            return 1
-        fi
-
-        if [[ "$script_body" == "$file_body" ]]; then
-            echo "The script body in the file is the same as the running script. No action needed."
-        else
-            echo "The script body in the file is different from the running script. Replacing the running script with the file version..."
-            echo "$file_body" > "$0"
-            echo "Script replaced. Restarting the script..."
-            exec "$0"
-            exit 0
-        fi
-    }
-
-    compare_script_bodies
-    check_exit_status
-
     sudo apt-get upgrade -y
     update
     housekeeping
-    update_pihole
-    update_tailscale
-    update_technitium_dns
-    reboot
-    leave
+
+    # Update Pi-hole if installed
+    if command -v pihole &>/dev/null; then
+        update_pihole
+    fi
+
+    # Update TailScale if installed
+    if command -v tailscale &>/dev/null; then
+        update_tailscale
+    fi
+
+    # Update Technitium DNS if installed
+    if command -v technitium &>/dev/null; then
+        update_technitium_dns
+    fi
 
     echo "$(date "+%m/%d/%Y @ %T") : ******** Update & Clean Script Completed! ********" >> "$LOGFILE"
     echo
