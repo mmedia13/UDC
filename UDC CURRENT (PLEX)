@@ -209,8 +209,8 @@ housekeeping() {
     sudo updatedb
     check_exit_status
     echo
-    echo "** Update & Clean v6.0 Complete **"
-    echo "$(date "+%T") : - Update & Clean v6.0 Script Complete" >> "$LOGFILE" 2>&1
+    echo "** Update & Clean v6.1 Complete **"
+    echo "$(date "+%T") : - Update & Clean v6.1 Script Complete" >> "$LOGFILE" 2>&1
 }
 
 reboot() {
@@ -235,7 +235,7 @@ leave() {
 {
     echo
     echo "==========================================="
-    echo "       -:: Update & Clean v6.0 ::-"
+    echo "       -:: Update & Clean v6.1 ::-"
     echo "==========================================="
     echo
     echo "$(date "+%m/%d/%Y @ %T") : ******** Update & Clean Script Started! ********" >> "$LOGFILE"
@@ -245,7 +245,7 @@ leave() {
     compare_script_bodies() {
         local script_body="$(cat "$0")"
         local file_body=""
-        local file_url="https://raw.githubusercontent.com/mmedia13/UDC/main/UDC%20v6.0%20(plex)"
+        local file_url="https://raw.githubusercontent.com/mmedia13/UDC/main/UDC%20v6.1%20(plex)"
         file_body=$(curl -s "$file_url")
 
         if [[ -z "$file_body" ]]; then
