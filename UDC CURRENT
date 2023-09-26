@@ -310,7 +310,7 @@ leave() {
     compare_script_bodies() {
         local script_body="$(cat "$0")"
         local file_body=""
-        local file_url="https://github.com/mmedia13/UDC/raw/main/UDC%20CURRENT"
+        local file_url="https://github.com/mmedia13/UDC/raw/main/UDC%20Current%20(REG)"
         file_body="$(wget -qO- "$file_url")"
 
         if [[ -z "$file_body" ]]; then
