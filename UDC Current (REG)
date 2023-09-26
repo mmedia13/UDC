@@ -210,8 +210,8 @@ housekeeping() {
     sudo updatedb
     check_exit_status
     echo
-    echo "** Update & Clean v6.0 Complete **"
-    echo "$(date "+%T") : - Update & Clean v6.0 Script Complete" >> "$LOGFILE" 2>&1
+    echo "** Update & Clean v6.1 Complete **"
+    echo "$(date "+%T") : - Update & Clean v6.1 Script Complete" >> "$LOGFILE" 2>&1
 }
 
 # Function to update Pi-hole
@@ -300,7 +300,7 @@ leave() {
 {
     echo
     echo "==========================================="
-    echo "       -:: Update & Clean v6.0 ::-"
+    echo "       -:: Update & Clean v6.1 ::-"
     echo "==========================================="
     echo
     echo "$(date "+%m/%d/%Y @ %T") : ******** Update & Clean Script Started! ********" >> "$LOGFILE"
