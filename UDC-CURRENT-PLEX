@@ -245,7 +245,7 @@ leave() {
     compare_script_bodies() {
         local script_body="$(cat "$0")"
         local file_body=""
-        local file_url="https://raw.githubusercontent.com/mmedia13/UDC/main/UDC%20v6.1%20(plex)"
+        local file_url="https://github.com/mmedia13/UDC/raw/main/UDC-CURRENT-PLEX"
         file_body=$(curl -s "$file_url")
 
         if [[ -z "$file_body" ]]; then
