@@ -31,63 +31,13 @@ check_exit_status() {
     fi
 }
 
-# Function to perform the update process
-update() {
-    # ... (existing update function code) ...
-}
-
-# Function to perform housekeeping tasks
-housekeeping() {
-    # ... (existing housekeeping function code) ...
-}
-
-# Function to update Pi-hole
-update_pihole() {
-    echo
-    echo "** Update Pi-hole **"
-    echo "$(date "+%T") : - Update Pi-hole" >> "$LOGFILE" 2>&1
-
-    # Check if Pi-hole is installed
-    if ! command -v pihole &>/dev/null; then
-        echo "[UDC $VERSION LOG] Pi-hole is not installed. Skipping Pi-hole update." >> "$LOGFILE"
-        return
-    fi
-
-    # Proceed with Pi-hole update
-    if pihole -v check | grep -q "Pi-hole Core:.*is up to date"; then
-        echo "[UDC $VERSION LOG] Pi-hole is already up to date." >> "$LOGFILE"
-    else
-        echo "[UDC $VERSION LOG] Updating Pi-hole..." >> "$LOGFILE"
-        sudo pihole -up
-    fi
-
-    check_exit_status
-    echo
-    echo "** Update Pi-hole's Lists / Gravity **"
-    echo "$(date "+%T") : - Update Pi-hole Lists" >> "$LOGFILE" 2>&1
-    sudo pihole -g
-    check_exit_status
-}
-
-# Function to perform the reboot
-reboot() {
-    # ... (existing reboot function code) ...
-}
-
-# Function to gracefully exit the script
+# Define the leave function to gracefully exit the script
 leave() {
-    if [ -f /var/run/reboot-required ]; then
-        echo "[UDC $VERSION LOG] $(date "+%T") : - Maintenance reboot needed, rebooting in 5 minutes" >> "$LOGFILE" 2>&1
-        sudo shutdown -r +5 "Will REBOOT IN 5 due to routine Maintenance"
-        check_exit_status
-    fi
-
     if [ $ERROR_FLAG -eq 1 ]; then
         echo "[UDC $VERSION ERROR LOG] $(date "+%m/%d/%Y @ %T") : ******** Update & Clean Script Completed with ERRORS! ********" >> "$LOGFILE"
     else
         echo "[UDC $VERSION LOG] $(date "+%m/%d/%Y @ %T") : ******** Update & Clean Script Completed Successfully! ********" >> "$LOGFILE"
     fi
-
     echo
     echo "---------------------------"
     echo "          *fin*            "
@@ -95,6 +45,8 @@ leave() {
     echo
     exit 0
 }
+
+# Rest of your script...
 
 # Main script execution
 {
@@ -109,5 +61,4 @@ leave() {
     # ... Include the main execution block that calls the functions as needed ...
 
     leave
-
 } 2>> "$ERRORLOG"
