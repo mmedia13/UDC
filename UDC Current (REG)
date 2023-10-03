@@ -1,6 +1,6 @@
 #!/bin/bash
 # Version number
-VERSION="v6.2"
+VERSION="v6.2" # Update the version number to v6.2
 
 # Set log file paths
 LOGFILE="/home/logs/UDC/UpdateNClean.log-$(date +%m.%d.%y)"
@@ -8,13 +8,9 @@ LOGFILE2="/home/logs/rkhunter/RKhunter.log-$(date +%m.%d.%y)"
 LOGFILE3="/home/logs/clamav/ClamAV.log-$(date +%m.%d.%y)"
 ERRORLOG="/home/logs/UDC/UDC-ERRORS/UDC-ERROR-Log-$(date +%m.%d.%y_%H.%M.%S)"
 
-# Initialize error flag
-ERROR_FLAG=0
-
 # Function to log errors
 log_error() {
-    ERROR_FLAG=1
-    echo "[UDC $VERSION ERROR LOG] $(date "+%m/%d/%Y @ %T"): $1" >> "$ERRORLOG"
+    echo "[ERROR] $(date "+%T"): $1" >> "$ERRORLOG"
 }
 
 # Function to check exit status of the previous command
@@ -31,13 +27,43 @@ check_exit_status() {
     fi
 }
 
-# Define the leave function to gracefully exit the script
-leave() {
-    if [ $ERROR_FLAG -eq 1 ]; then
-        echo "[UDC $VERSION ERROR LOG] $(date "+%m/%d/%Y @ %T") : ******** Update & Clean Script Completed with ERRORS! ********" >> "$LOGFILE"
-    else
-        echo "[UDC $VERSION LOG] $(date "+%m/%d/%Y @ %T") : ******** Update & Clean Script Completed Successfully! ********" >> "$LOGFILE"
+# Function to perform the update process
+update() {
+    # Your update function code here...
+}
+
+# Function to perform housekeeping tasks
+housekeeping() {
+    # Your housekeeping function code here...
+}
+
+# Function to update Pi-hole
+update_pihole() {
+    # Your Pi-hole update function code here...
+}
+
+# Function to update TailScale
+update_tailscale() {
+    # Your TailScale update function code here...
+}
+
+# Function to update Technitium DNS
+update_technitium_dns() {
+    # Your Technitium DNS update function code here...
+}
+
+# Function to check if a reboot is required
+reboot() {
+    if [ -f /var/run/reboot-required ]; then
+        echo "$(date "+%T") : - Maintenance reboot needed, rebooting in 5 minutes" >> "$LOGFILE" 2>&1
+        sudo shutdown -r +5 "Will REBOOT IN 5 due to routine Maintenance"
+        check_exit_status
     fi
+}
+
+# Function to gracefully exit the script
+leave() {
+    echo "$(date "+%T") : ******** Update & Clean Script Completed! ********" >> "$LOGFILE"
     echo
     echo "---------------------------"
     echo "          *fin*            "
@@ -46,13 +72,6 @@ leave() {
     exit 0
 }
 
-# Debug statement: Print a message when a function is called
-debug_message() {
-    echo "[DEBUG] $(date "+%m/%d/%Y @ %T") : $1" >> "$LOGFILE"
-}
-
-# Rest of your script...
-
 # Main script execution
 {
     echo
@@ -60,16 +79,10 @@ debug_message() {
     echo "       -:: Update & Clean $VERSION ::-"
     echo "==========================================="
     echo
-    echo "[UDC $VERSION LOG] $(date "+%m/%d/%Y @ %T") : ******** Update & Clean Script Started! ********" >> "$LOGFILE"
+    echo "$(date "+%T") : ******** Update & Clean Script Started! ********" >> "$LOGFILE"
     echo
 
-    # Debug statement: Print a message when the main execution block starts
-    debug_message "Main execution block started"
-
-    # ... Include the main execution block that calls the functions as needed ...
-
-    # Debug statement: Print a message when the main execution block ends
-    debug_message "Main execution block ended"
+    # Your main execution block here...
 
     leave
 } 2>> "$ERRORLOG"
