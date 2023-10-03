@@ -31,6 +31,11 @@ check_exit_status() {
     fi
 }
 
+# Define the leave function to gracefully exit the script
+leave() {
+    exit 0
+}
+
 # Rest of your script...
 
 # Main script execution
