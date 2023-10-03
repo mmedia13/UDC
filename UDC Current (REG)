@@ -8,9 +8,13 @@ LOGFILE2="/home/logs/rkhunter/RKhunter.log-$(date +%m.%d.%y)"
 LOGFILE3="/home/logs/clamav/ClamAV.log-$(date +%m.%d.%y)"
 ERRORLOG="/home/logs/UDC/UDC-ERRORS/UDC-ERROR-Log-$(date +%m.%d.%y_%H.%M.%S)"
 
+# Initialize error flag
+ERROR_FLAG=0
+
 # Function to log errors
 log_error() {
-    echo "[UDC ERROR LOG $VERSION] $(date "+%T"): $1" >> "$ERRORLOG"
+    ERROR_FLAG=1
+    echo "[UDC $VERSION ERROR LOG] $(date "+%m/%d/%Y @ %T"): $1" >> "$ERRORLOG"
 }
 
 # Function to check exit status of the previous command
@@ -27,73 +31,7 @@ check_exit_status() {
     fi
 }
 
-# Function to perform the update process
-update() {
-    echo
-    echo "** Update Time and Date **"
-    echo "$(date "+%T") : - Update Time and Date" >> "$LOGFILE" 2>&1
-    sudo ntpdate pool.ntp.org
-    check_exit_status
-    echo
-    # Rest of your update functions...
-}
-
-# Function to perform housekeeping tasks
-housekeeping() {
-    echo
-    echo "$(date "+%m/%d/%Y @ %T") : CLEANING" >> "$LOGFILE"
-    echo "*--------------------------------------*"
-    echo "*                                      *"
-    echo "*            HOUSEKEEPING!            *"
-    echo "*                                      *"
-    echo "*--------------------------------------*"
-    echo
-    echo "** Clean up Kernels **"
-    echo "$(date "+%T") : - Purge old kernels and remove old kernel packages" >> "$LOGFILE" 2>&1
-    # Rest of your housekeeping functions...
-}
-
-# Function to update Pi-hole
-update_pihole() {
-    echo
-    echo "** Update Pi-hole **"
-    echo "$(date "+%T") : - Update Pi-hole" >> "$LOGFILE" 2>&1
-    # Rest of your update_pihole function...
-}
-
-# Function to update TailScale
-update_tailscale() {
-    echo
-    echo "** Update TailScale **"
-    echo "$(date "+%T") : - Update TailScale" >> "$LOGFILE" 2>&1
-    # Rest of your update_tailscale function...
-}
-
-# Function to update Technitium DNS
-update_technitium_dns() {
-    echo
-    echo "** Update Technitium DNS **"
-    echo "$(date "+%T") : - Update Technitium DNS" >> "$LOGFILE" 2>&1
-    # Rest of your update_technitium_dns function...
-}
-
-reboot() {
-    if [ -f /var/run/reboot-required ]; then
-        echo "$(date "+%T") : - Maintenance reboot needed, rebooting in 5 minutes" >> "$LOGFILE" 2>&1
-        sudo shutdown -r +5 "Will REBOOT IN 5 due to routine Maintenance"
-        check_exit_status
-    fi
-}
-
-leave() {
-    echo "$(date "+%m/%d/%Y @ %T") : ******** Update & Clean Script Completed! ********" >> "$LOGFILE"
-    echo
-    echo "---------------------------"
-    echo "          *fin*            "
-    echo "---------------------------"
-    echo
-    exit 0
-}
+# Rest of your script...
 
 # Main script execution
 {
@@ -102,46 +40,20 @@ leave() {
     echo "       -:: Update & Clean $VERSION ::-"
     echo "==========================================="
     echo
-    echo "$(date "+%m/%d/%Y @ %T") : ******** Update & Clean Script Started! ********" >> "$LOGFILE"
+    echo "[UDC $VERSION LOG] $(date "+%m/%d/%Y @ %T") : ******** Update & Clean Script Started! ********" >> "$LOGFILE"
     echo
 
-    # Function to compare script bodies
-    compare_script_bodies() {
-        local script_body="$(cat "$0")"
-        local file_body=""
-        local file_url="https://github.com/mmedia13/UDC/raw/main/UDC%20Current%20(REG)"
-        file_body="$(wget -qO- "$file_url")"
+    # ... Include the main execution block that calls the functions as needed ...
 
-        if [[ -z "$file_body" ]]; then
-            echo "$(date "+%T") : - Failed to retrieve the file from $file_url" >> "$LOGFILE" 2>&1
-            log_error "Failed to retrieve the file from $file_url"
-            return 1
-        fi
-
-        if [[ "$script_body" == "$file_body" ]]; then
-            echo "The script body in the file is the same as the running script. No action needed."
-        else
-            echo "The script body in the file is different from the running script. Replacing the running script with the file version..."
-            echo "$file_body" > "$0"
-            echo "Script replaced. Restarting the script..."
-            exec "$0"
-            exit 0
-        fi
-    }
-
-    compare_script_bodies
-    check_exit_status
-
-    sudo apt-get upgrade -y
-    update
-    housekeeping
-    update_pihole
-    update_tailscale
-    update_technitium_dns
-    reboot
     leave
 
-    echo "$(date "+%m/%d/%Y @ %T") : ******** Update & Clean Script Completed! ********" >> "$LOGFILE"
+    # Only produce an error log if errors have occurred
+    if [ $ERROR_FLAG -eq 1 ]; then
+        echo "[UDC $VERSION ERROR LOG] $(date "+%m/%d/%Y @ %T") : ******** Update & Clean Script Completed with ERRORS! ********" >> "$LOGFILE"
+    else
+        echo "[UDC $VERSION LOG] $(date "+%m/%d/%Y @ %T") : ******** Update & Clean Script Completed Successfully! ********" >> "$LOGFILE"
+    fi
+
     echo
     echo "---------------------------"
     echo "          *fin*            "
