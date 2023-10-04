@@ -1,6 +1,6 @@
 #!/bin/bash
 # Version number
-VERSION="v6.2" # Update the version number to v6.2
+VERSION="v6.2"
 
 # Set log file paths
 LOGFILE="/home/logs/UDC/UpdateNClean.log-$(date +%m.%d.%y)"
