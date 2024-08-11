@@ -1,5 +1,5 @@
 #!/bin/bash
-#v6.1
+#v6.2
 
 # Set log file paths
 LOGFILE="/home/logs/UDC/UpdateNClean.log-$(date +%m.%d.%y)"
@@ -210,8 +210,8 @@ housekeeping() {
     sudo updatedb
     check_exit_status
     echo
-    echo "** Update & Clean v6.1 Complete **"
-    echo "$(date "+%T") : - Update & Clean v6.1 Script Complete" >> "$LOGFILE" 2>&1
+    echo "** Update & Clean v6.2 Complete **"
+    echo "$(date "+%T") : - Update & Clean v6.2 Script Complete" >> "$LOGFILE" 2>&1
 }
 
 # Function to update Pi-hole
@@ -296,11 +296,31 @@ leave() {
     exit 0
 }
 
+# Function to check and install/update Proyon Pass
+check_proyon_pass() {
+    echo
+    echo "** Checking Proyon Pass **"
+    echo "$(date "+%T") : - Checking Proyon Pass" >> "$LOGFILE" 2>&1
+
+    if ! command -v proyonpass &>/dev/null; then
+        echo "Proyon Pass is not installed. Installing Proyon Pass..."
+        sudo apt-get update
+        sudo apt-get install proyonpass -y
+        check_exit_status
+    else
+        echo "Proyon Pass is installed. Checking for updates..."
+        sudo apt-get update
+        sudo apt-get install --only-upgrade proyonpass -y
+        check_exit_status
+    fi
+}
+
+
 # Main script execution
 {
     echo
     echo "==========================================="
-    echo "       -:: Update & Clean v6.1 ::-"
+    echo "       -:: Update & Clean v6.2 ::-"
     echo "==========================================="
     echo
     echo "$(date "+%m/%d/%Y @ %T") : ******** Update & Clean Script Started! ********" >> "$LOGFILE"
