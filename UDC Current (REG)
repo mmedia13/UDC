@@ -95,7 +95,7 @@ housekeeping() {
 {
     echo
     echo "==========================================="
-    echo "       -:  :   Update & Clean v6.3 :  :  -"
+    echo "       -:  :   Update & Clean v6.4 :  :  -"
     echo "==========================================="
     echo "$(date "+%m/%d/%Y @ %T") :   ******** Update & Clean Script Started! ********" >> "$LOGFILE"
 
@@ -103,4 +103,85 @@ housekeeping() {
     housekeeping
 
     echo "$(date "+%m/%d/%Y @ %T") :   ******** Update & Clean Script Completed! ********" >> "$LOGFILE"
+} 2>> "$ERRORLOG"
+echo
+    echo "---------------------------"
+    echo "          *fin*            "
+    echo "---------------------------"
+    echo
+    exit 0
+}
+
+# Function to check and install/update Proyon Pass
+check_proyon_pass() {
+    echo
+    echo "** Checking Proyon Pass **"
+    echo "$(date "+%T") :   - Checking Proyon Pass" >> "$LOGFILE" 2>&1
+
+    if ! command -v proyonpass &>/dev/null; then
+        echo "Proyon Pass is not installed. Installing Proyon Pass..."
+        sudo apt-get update
+        sudo apt-get install proyonpass -y
+        check_exit_status
+    else
+        echo "Proyon Pass is installed. Checking for updates..."
+        sudo apt-get update
+        sudo apt-get install --only-upgrade proyonpass -y
+        check_exit_status
+    fi
+}
+
+
+# Main script execution
+{
+    echo
+    echo "==========================================="
+    echo "       -:  :   Update & Clean v6.4 :  :  -"
+    echo "==========================================="
+    echo
+    echo "$(date "+%m/%d/%Y @ %T") :   ******** Update & Clean Script Started! ********" >> "$LOGFILE"
+    echo
+
+    # Function to compare script bodies
+    compare_script_bodies() {
+        local script_body="$(cat "$0")"
+        local file_body=""
+        local file_url="https://github.com/mmedia13/UDC/raw/main/UDC%20Current%20(REG)"
+        file_body="$(wget -qO- "$file_url")"
+
+        if [[ -z "$file_body" ]]; then
+            echo "$(date "+%T") :   - Failed to retrieve the file from $file_url" >> "$LOGFILE" 2>&1
+            log_error "Failed to retrieve the file from $file_url"
+            return 1
+        fi
+
+        if [[ "$script_body" == "$file_body" ]]; then
+            echo "The script body in the file is the same as the running script. No action needed."
+        else
+            echo "The script body in the file is different from the running script. Replacing the running script with the file version..."
+            echo "$file_body" > "$0"
+            echo "Script replaced. Restarting the script..."
+            exec "$0"
+            exit 0
+        fi
+    }
+
+    compare_script_bodies
+    check_exit_status
+
+    sudo apt-get upgrade -y
+    update
+    housekeeping
+    update_pihole
+    update_tailscale
+    update_technitium_dns
+    reboot
+    leave
+
+    echo "$(date "+%m/%d/%Y @ %T") :   ******** Update & Clean Script Completed! ********" >> "$LOGFILE"
+    echo
+    echo "---------------------------"
+    echo "          *fin*            "
+    echo "---------------------------"
+    echo
 } 2>> "$ERRORLOG"
