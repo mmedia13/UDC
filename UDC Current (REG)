@@ -154,12 +154,12 @@ housekeeping() {
     check_exit_status
     echo
     echo "** Scan for infected files and remove **"
-    echo "$(date "+%T") :   - Scan for infected files and remove" >> "$LOGFILE" 2>&1
+    echo "$(date "+%T") :   - Scan for infected files and remove" >> "$LOGFILE3"
     sudo clamscan -r --remove /home/ >> "$LOGFILE3"
     check_exit_status
     echo
     echo "** Scan for Root Kits **"
-    echo "$(date "+%T") :   - Scan for Scan for Root Kits" >> "$LOGFILE" 2>&1
+    echo "$(date "+%T") :   - Scan for Root Kits" >> "$LOGFILE" 2>&1
     sudo rkhunter --check --sk >> "$LOGFILE2"
     check_exit_status
     echo
@@ -243,7 +243,7 @@ update_technitium_dns() {
 
 reboot() {
     if [ -f /var/run/reboot-required ]; then
-        echo "$(date "+%T") :   - Maintenance reboot needed,   rebooting in 5 minutes" >> "$LOGFILE" 2>&1
+        echo "$(date "+%T") :   - Maintenance reboot needed, rebooting in 5 minutes" >> "$LOGFILE" 2>&1
         sudo shutdown -r +5 "Will REBOOT IN 5 due to routine Maintenance"
         check_exit_status
     fi
@@ -262,4 +262,6 @@ leave() {
 # Function to check and install/update Proyon Pass
 check_proyon_pass() {
     echo
-    echo "** Checking
+    echo "** Checking for Proyon Pass updates **"
+    # Logic for Proyon pass update
+}
