@@ -1,0 +1,439 @@
+#!/bin/bash
+# v7.0 - Refactored for Stability, Security, and Cross-Platform Support (Ubuntu/RPi)
+
+# --- Configuration ---
+LOG_DIR="/home/logs"
+UDC_LOG_DIR="$LOG_DIR/UDC"
+RKHUNTER_LOG_DIR="$LOG_DIR/rkhunter"
+CLAMAV_LOG_DIR="$LOG_DIR/clamav"
+ERROR_LOG_DIR="$UDC_LOG_DIR/UDC-ERRORS"
+SCRIPT_URL="https://github.com/mmedia13/UDC/raw/main/UDC%20Current%20(REG)"
+KEEP_KERNELS=2
+
+# Create log directories if they don't exist
+mkdir -p "$UDC_LOG_DIR" "$RKHUNTER_LOG_DIR" "$CLAMAV_LOG_DIR" "$ERROR_LOG_DIR"
+
+# Set log file paths with safe date formatting
+DATE_STR=$(date +%m.%d.%y)
+TIME_STR=$(date +%H.%M.%S)
+LOGFILE="$UDC_LOG_DIR/UpdateNClean.log-$DATE_STR"
+LOGFILE2="$RKHUNTER_LOG_DIR/RKhunter.log-$DATE_STR"
+LOGFILE3="$CLAMAV_LOG_DIR/ClamAV.log-$DATE_STR"
+ERRORLOG="$ERROR_LOG_DIR/UDC-ERROR-Log-${DATE_STR}_${TIME_STR}"
+
+# --- Functions ---
+
+log_error() {
+    echo "[ERROR] $(date "+%T"): $1" >> "$ERRORLOG"
+    echo "[ERROR] $(date "+%T"): $1" >&2
+}
+
+check_exit_status() {
+    if [ $? -eq 0 ]; then
+        echo "          ^ Process Completed ^" >> "$LOGFILE"
+    else
+        echo "          ^ [ERROR] Process Failed! ^" >> "$LOGFILE"
+        log_error "Process failed (Exit Code: $?)"
+    fi
+}
+
+# --- Update Functions ---
+
+update() {
+    echo
+    echo "** Update Time and Date **"
+    echo "$(date "+%T") :   - Update Time and Date" >> "$LOGFILE"
+    sudo ntpdate pool.ntp.org || log_error "ntpdate failed"
+    check_exit_status
+
+    echo
+    echo "** Update package lists for upgrades **"
+    echo "$(date "+%T") :   - Update package lists for upgrades" >> "$LOGFILE"
+    sudo apt-get update
+    check_exit_status
+
+    echo
+    echo "** Upgrade System to new release (if Available) **"
+    echo "$(date "+%T") :   - Upgrade System to new release (if Available)" >> "$LOGFILE"
+    # Only run do-release-upgrade on Ubuntu, skip on Pi/Debian if not applicable
+    if command -v do-release-upgrade &>/dev/null; then
+        sudo do-release-upgrade -f DistUpgradeViewNonInteractive >> "$LOGFILE" 2>&1
+        check_exit_status
+    else
+        echo "do-release-upgrade not found (likely Debian/RPi). Skipping release upgrade." >> "$LOGFILE"
+    fi
+
+    echo
+    echo "** Updates packages and libraries **"
+    echo "$(date "+%T") :   - Updates packages and libraries" >> "$LOGFILE"
+    sudo apt-get full-upgrade -y
+    check_exit_status
+
+    echo
+    echo "** Download and install packages as well as remove obsolete packages **"
+    echo "$(date "+%T") :   - Download and install packages as well as remove obsolete packages" >> "$LOGFILE"
+    sudo apt-get dist-upgrade -y
+    check_exit_status
+
+    echo
+    echo "** Update Firefox Browser **"
+    echo "$(date "+%T") :   - Update Firefox Browser" >> "$LOGFILE"
+    sudo apt-get install firefox -y
+    check_exit_status
+
+    echo
+    echo "** Finish configuration of partially installed packages **"
+    echo "$(date "+%T") :   - Finish configuration of partially installed packages" >> "$LOGFILE"
+    yes | sudo dpkg --configure -a
+    check_exit_status
+
+    echo
+    echo "** Update ClamAV (if necessary) **"
+    echo "$(date "+%T") :   - Updating ClamAV package..." >> "$LOGFILE"
+    if command -v clamscan &>/dev/null; then
+        sudo apt-get update
+        sudo apt-get install --only-upgrade clamav clamav-daemon -y
+        check_exit_status
+    else
+        echo "ClamAV is not installed. Skipping update." >> "$LOGFILE"
+    fi
+
+    echo
+    echo "** Update virus database **"
+    echo "$(date "+%T") :   - Update virus database" >> "$LOGFILE"
+    if command -v freshclam &>/dev/null; then
+        # Stop service if running, update, then start
+        if systemctl is-active --quiet clamav-freshclam 2>/dev/null; then
+            sudo systemctl stop clamav-freshclam
+        elif [ -f /etc/init.d/clamav-freshclam ]; then
+            sudo /etc/init.d/clamav-freshclam stop
+        fi
+        
+        sudo freshclam
+        check_exit_status
+
+        if systemctl is-active --quiet clamav-freshclam 2>/dev/null; then
+            sudo systemctl start clamav-freshclam
+        elif [ -f /etc/init.d/clamav-freshclam ]; then
+            sudo /etc/init.d/clamav-freshclam start
+        fi
+    else
+        echo "freshclam not found. Skipping database update." >> "$LOGFILE"
+    fi
+
+    echo
+    echo "** Update RKhunter **"
+    echo "$(date "+%T") :   - Update RKhunter" >> "$LOGFILE"
+    if command -v rkhunter &>/dev/null; then
+        sudo rkhunter --update
+        check_exit_status
+        echo
+        echo "** Update RKhunter database **"
+        echo "$(date "+%T") :   - Update RKhunter Database" >> "$LOGFILE"
+        sudo rkhunter --propupd
+        check_exit_status
+    else
+        echo "rkhunter not found. Skipping." >> "$LOGFILE"
+    fi
+}
+
+# --- Housekeeping Functions ---
+
+housekeeping() {
+    echo
+    echo "$(date "+%m/%d/%Y @ %T") :   CLEANING" >> "$LOGFILE"
+    echo "*--------------------------------------*"
+    echo "*                                      *"
+    echo "*            HOUSEKEEPING!            *"
+    echo "*                                      *"
+    echo "*--------------------------------------*"
+
+    echo
+    echo "** Clean up Kernels **"
+    echo "$(date "+%T") :   - Purge old kernels" >> "$LOGFILE"
+
+    # Safe kernel cleanup using dpkg (works on Ubuntu and Pi)
+    CURRENT_KERNEL=$(uname -r)
+    # Extract just the version part for comparison (e.g., 5.15.0-xx -> 5.15.0)
+    CURRENT_VER=$(echo "$CURRENT_KERNEL" | sed 's/-.*//')
+    
+    # Get list of installed kernels, sorted by version (newest first)
+    INSTALLED_KERNELS=$(dpkg -l 'linux-image-*' 'linux-headers-*' 2>/dev/null | awk '/^ii/ {print $2}' | sort -V -r)
+    
+    COUNT=0
+    PURGE_LIST=""
+    
+    for KERNEL_PKG in $INSTALLED_KERNELS; do
+        COUNT=$((COUNT + 1))
+        
+        # Extract version from package name (e.g., linux-image-5.15.0-xx-generic -> 5.15.0)
+        PKG_VER=$(echo "$KERNEL_PKG" | sed -n 's/linux-image-\([0-9.]*\).*/\1/p' | sed -n 's/linux-headers-\([0-9.]*\).*/\1/p')
+        
+        # Skip if we haven't reached the keep limit yet
+        if [ "$COUNT" -le "$KEEP_KERNELS" ]; then
+            continue
+        fi
+        
+        # Always keep the currently running kernel
+        if [ "$PKG_VER" = "$CURRENT_VER" ]; then
+            continue
+        fi
+        
+        # Add to purge list if installed
+        if dpkg -l "$KERNEL_PKG" &>/dev/null; then
+            PURGE_LIST="$PURGE_LIST $KERNEL_PKG"
+        fi
+    done
+
+    if [ -z "$PURGE_LIST" ]; then
+        echo "No old kernels found for removal." >> "$LOGFILE"
+        echo "No old kernels found for removal."
+    else
+        echo "Removing old kernels: $PURGE_LIST" >> "$LOGFILE"
+        sudo apt-get remove -y --purge $PURGE_LIST
+        check_exit_status
+    fi
+
+    echo
+    echo "** Remove unused config files **"
+    if command -v deborphan &>/dev/null; then
+        sudo deborphan -n --find-config | xargs -r sudo apt-get -y --purge autoremove >> "$LOGFILE" 2>&1
+        check_exit_status
+    else
+        echo "deborphan not found. Skipping orphan check." >> "$LOGFILE"
+    fi
+
+    echo
+    echo "** Clear local repository of retrieved package files **"
+    echo "$(date "+%T") :   - Clear local repository" >> "$LOGFILE"
+    sudo apt-get autoclean -y >> "$LOGFILE" 2>&1
+    check_exit_status
+
+    echo
+    echo "** Uninstall unneeded packages and config files **"
+    echo "$(date "+%T") :   - Autoremove unneeded packages" >> "$LOGFILE"
+    sudo apt-get autoremove --purge -y >> "$LOGFILE" 2>&1
+    check_exit_status
+
+    echo
+    echo "** Clear out local repository of downloaded package files **"
+    echo "$(date "+%T") :   - Clean package cache" >> "$LOGFILE"
+    # Fixed: removed invalid 'all' argument
+    sudo apt-get clean -y >> "$LOGFILE" 2>&1
+    check_exit_status
+
+    echo
+    echo "** Completely purge previously installed packages and config files **"
+    echo "$(date "+%T") :   - Purge rc packages" >> "$LOGFILE"
+    RC_PACKAGES=$(dpkg -l | awk '/^rc/ { print $2 }')
+    if [ -n "$RC_PACKAGES" ]; then
+        sudo apt-get purge $RC_PACKAGES -y >> "$LOGFILE" 2>&1
+        check_exit_status
+    else
+        echo "No rc packages to purge." >> "$LOGFILE"
+    fi
+
+    echo
+    echo "** Scan for infected files and remove **"
+    echo "$(date "+%T") :   - ClamAV Scan" >> "$LOGFILE"
+    if command -v clamscan &>/dev/null; then
+        # Scan /home only, remove infected files
+        sudo clamscan -r --remove --infected /home/ >> "$LOGFILE3" 2>&1
+        check_exit_status
+    else
+        echo "ClamAV not found. Skipping scan." >> "$LOGFILE"
+    fi
+
+    echo
+    echo "** Scan for Root Kits **"
+    echo "$(date "+%T") :   - RKhunter Scan" >> "$LOGFILE"
+    if command -v rkhunter &>/dev/null; then
+        sudo rkhunter --check --sk >> "$LOGFILE2" 2>&1
+        check_exit_status
+    else
+        echo "rkhunter not found. Skipping scan." >> "$LOGFILE"
+    fi
+
+    echo
+    echo "** Remove Log Files older than 32 Days **"
+    echo "$(date "+%T") :   - Cleanup old logs" >> "$LOGFILE"
+    # Safer find command with nullglob handling
+    shopt -s nullglob
+    OLD_LOGS=(/home/logs/*)
+    if [ ${#OLD_LOGS[@]} -gt 0 ]; then
+        find /home/logs -maxdepth 1 -type f -mtime +32 -delete >> "$LOGFILE" 2>&1
+        find /home/logs -maxdepth 1 -type d -empty -delete >> "$LOGFILE" 2>&1
+    fi
+    check_exit_status
+    shopt -u nullglob
+
+    echo
+    echo "** Update database **"
+    echo "$(date "+%T") :   - Updatedb" >> "$LOGFILE"
+    sudo updatedb
+    check_exit_status
+
+    echo
+    echo "** Update & Clean v7.0 Complete **"
+    echo "$(date "+%T") :   - Update & Clean Script Complete" >> "$LOGFILE"
+}
+
+# --- Optional Service Updates ---
+
+update_pihole() {
+    echo
+    echo "** Update Pi-hole **"
+    echo "$(date "+%T") :   - Update Pi-hole" >> "$LOGFILE"
+
+    if ! command -v pihole &>/dev/null; then
+        echo "Pi-hole is not installed. Skipping." >> "$LOGFILE"
+        return
+    fi
+
+    echo "Updating Pi-hole..."
+    sudo pihole -up
+    check_exit_status
+
+    echo
+    echo "** Update Pi-hole's Lists / Gravity **"
+    echo "$(date "+%T") :   - Update Pi-hole Lists" >> "$LOGFILE"
+    sudo pihole -g
+    check_exit_status
+}
+
+update_tailscale() {
+    echo
+    echo "** Update TailScale **"
+    echo "$(date "+%T") :   - Update TailScale" >> "$LOGFILE"
+
+    if ! command -v tailscale &>/dev/null; then
+        echo "TailScale is not installed. Skipping." >> "$LOGFILE"
+        return
+    fi
+
+    echo "Updating TailScale..."
+    sudo apt-get install tailscale -y
+    check_exit_status
+}
+
+update_technitium_dns() {
+    echo
+    echo "** Update Technitium DNS **"
+    echo "$(date "+%T") :   - Update Technitium DNS" >> "$LOGFILE"
+
+    if ! command -v technitium &>/dev/null; then
+        echo "Technitium DNS is not installed. Skipping." >> "$LOGFILE"
+        return
+    fi
+
+    echo "Updating Technitium DNS..."
+    # Using curl with error handling
+    if curl -sSL https://download.technitium.com/dns/install.sh | sudo bash; then
+        echo "Technitium DNS updated successfully." >> "$LOGFILE"
+    else
+        log_error "Technitium DNS update failed."
+    fi
+    check_exit_status
+}
+
+check_proyon_pass() {
+    echo
+    echo "** Checking Proyon Pass **"
+    echo "$(date "+%T") :   - Checking Proyon Pass" >> "$LOGFILE"
+
+    if ! command -v proyonpass &>/dev/null; then
+        echo "Proyon Pass is not installed. Attempting install..."
+        sudo apt-get update
+        sudo apt-get install proyonpass -y
+        check_exit_status
+    else
+        echo "Proyon Pass is installed. Checking for updates..."
+        sudo apt-get update
+        sudo apt-get install --only-upgrade proyonpass -y
+        check_exit_status
+    fi
+}
+
+# --- Self Update Logic (Secured) ---
+
+compare_script_bodies() {
+    local file_url="$SCRIPT_URL"
+    local temp_file="/tmp/udc_update_check_$$_$(date +%s)"
+    
+    echo "Checking for script updates..." >> "$LOGFILE"
+
+    # 1. Download to temp file
+    if ! wget -q -O "$temp_file" "$file_url"; then
+        echo "Failed to download update from $file_url" >> "$LOGFILE"
+        rm -f "$temp_file"
+        return 1
+    fi
+
+    # 2. Verify it's a valid script (starts with #!)
+    if ! head -n 1 "$temp_file" | grep -q "^#!"; then
+        echo "Downloaded file is not a valid script. Aborting update." >> "$LOGFILE"
+        rm -f "$temp_file"
+        return 1
+    fi
+
+    # 3. Compare content
+    if diff -q "$0" "$temp_file" > /dev/null 2>&1; then
+        echo "Script is up to date." >> "$LOGFILE"
+        rm -f "$temp_file"
+        return 0
+    else
+        echo "New version detected. Creating backup and updating..." >> "$LOGFILE"
+        # Backup current script
+        cp "$0" "${0}.bak.$(date +%s)"
+        # Move new script into place
+        mv "$temp_file" "$0"
+        chmod +x "$0"
+        echo "Script updated. Restarting..." >> "$LOGFILE"
+        # Restart with original arguments
+        exec "$0" "$@"
+        exit 0
+    fi
+}
+
+# --- Main Execution ---
+
+{
+    echo
+    echo "==========================================="
+    echo "       -:  :   Update & Clean v7.0 :  :  -"
+    echo "==========================================="
+    echo
+    echo "$(date "+%m/%d/%Y @ %T") :   ******** Update & Clean Script Started! ********" >> "$LOGFILE"
+    echo
+
+    # Check for self-update first
+    compare_script_bodies
+    check_exit_status
+
+    # Initial apt upgrade
+    sudo apt-get upgrade -y
+    check_exit_status
+
+    # Run main functions
+    update
+    housekeeping
+    update_pihole
+    update_tailscale
+    update_technitium_dns
+    
+    # Reboot check
+    if [ -f /var/run/reboot-required ]; then
+        echo "$(date "+%T") :   - Maintenance reboot needed, rebooting in 5 minutes" >> "$LOGFILE"
+        sudo shutdown -r +5 "Will REBOOT IN 5 due to routine Maintenance"
+        check_exit_status
+    fi
+
+    echo "$(date "+%m/%d/%Y @ %T") :   ******** Update & Clean Script Completed! ********" >> "$LOGFILE"
+    echo
+    echo "---------------------------"
+    echo "          *fin*            "
+    echo "---------------------------"
+    echo
+} 2>> "$ERRORLOG"
+
+exit 0
