@@ -1,0 +1,154 @@
+#!/bin/bash
+# UDC-Setup.sh v1.0
+# Prepares the system for the UDC Maintenance Scripts
+# Installs dependencies, creates directories, and configures security tools.
+
+set -e # Exit on error (we handle errors manually in the script logic if needed, but good for setup)
+
+echo "=========================================="
+echo "       UDC System Preparation Script      "
+echo "=========================================="
+echo
+
+# --- Configuration ---
+LOG_BASE="/home/logs"
+UDC_DIR="$LOG_BASE/UDC"
+RKHUNTER_DIR="$LOG_BASE/rkhunter"
+CLAMAV_DIR="$LOG_BASE/clamav"
+ERROR_DIR="$UDC_DIR/UDC-ERRORS"
+
+# --- Helper Functions ---
+
+log_msg() {
+    echo "[INFO] $(date '+%T'): $1"
+}
+
+log_error() {
+    echo "[ERROR] $(date '+%T'): $1" >&2
+}
+
+check_root() {
+    if [ "$EUID" -ne 0 ]; then
+        log_error "This script must be run as root (sudo)."
+        echo "Please run: sudo ./UDC-Setup.sh"
+        exit 1
+    fi
+}
+
+# --- Step 1: Create Directories ---
+log_msg "Creating log directories..."
+
+mkdir -p "$UDC_DIR"
+mkdir -p "$RKHUNTER_DIR"
+mkdir -p "$CLAMAV_DIR"
+mkdir -p "$ERROR_DIR"
+
+# Set permissions (ensure the user running the script can write to them)
+# We set ownership to root:root for now, but allow group/world write if needed.
+# Ideally, the UDC script runs as sudo, so root ownership is fine.
+chown -R root:root "$LOG_BASE"
+chmod -R 755 "$LOG_BASE"
+
+log_msg "Directories created successfully."
+echo
+
+# --- Step 2: Update Package Lists ---
+log_msg "Updating package lists..."
+apt-get update -y
+echo
+
+# --- Step 3: Install Dependencies ---
+REQUIRED_PACKAGES="clamav clamav-daemon freshclam rkhunter deborphan ntpdate curl wget unzip"
+
+log_msg "Installing required packages: $REQUIRED_PACKAGES"
+apt-get install -y $REQUIRED_PACKAGES
+
+if [ $? -ne 0 ]; then
+    log_error "Failed to install some packages. Please check your internet connection and try again."
+    exit 1
+fi
+echo "Packages installed successfully."
+echo
+
+# --- Step 4: Configure ClamAV ---
+log_msg "Configuring ClamAV..."
+
+# On Ubuntu/Debian, the clamav-freshclam service often holds a lock on the database.
+# The UDC script runs freshclam manually, so we need to stop/disable the service to prevent "Database busy" errors.
+if systemctl is-active --quiet clamav-freshclam 2>/dev/null; then
+    log_msg "Stopping clamav-freshclam service to prevent conflicts..."
+    systemctl stop clamav-freshclam
+    systemctl disable clamav-freshclam
+    log_msg "clamav-freshclam service disabled."
+elif [ -f /etc/init.d/clamav-freshclam ]; then
+    /etc/init.d/clamav-freshclam stop
+    log_msg "Init script stopped."
+fi
+
+# Run initial database update
+log_msg "Running initial ClamAV database update (this may take a few minutes)..."
+freshclam
+if [ $? -ne 0 ]; then
+    log_error "Initial freshclam update failed. Check /var/log/clamav/freshclam.log."
+    # Don't exit, as the rest of the setup might still be valid
+else
+    log_msg "ClamAV database updated successfully."
+fi
+echo
+
+# --- Step 5: Configure RKhunter ---
+log_msg "Configuring RKhunter..."
+
+# Update RKhunter definitions
+rkhunter --update
+if [ $? -ne 0 ]; then
+    log_error "RKhunter update failed."
+else
+    log_msg "RKhunter definitions updated."
+fi
+
+# Propagate properties (initialize the database)
+rkhunter --propupd
+if [ $? -ne 0 ]; then
+    log_error "RKhunter property update failed."
+else
+    log_msg "RKhunter properties initialized."
+fi
+echo
+
+# --- Step 6: Verification ---
+log_msg "Verifying installation..."
+
+MISSING=""
+for cmd in clamscan freshclam rkhunter deborphan ntpdate curl wget; do
+    if ! command -v $cmd &>/dev/null; then
+        MISSING="$MISSING $cmd"
+    fi
+done
+
+if [ -n "$MISSING" ]; then
+    log_error "The following commands are missing: $MISSING"
+    log_error "Setup may be incomplete."
+    exit 1
+else
+    log_msg "All required tools are installed and available."
+fi
+
+# Check directories
+if [ -d "$UDC_DIR" ] && [ -d "$RKHUNTER_DIR" ] && [ -d "$CLAMAV_DIR" ] && [ -d "$ERROR_DIR" ]; then
+    log_msg "All log directories verified."
+else
+    log_error "Some log directories are missing."
+    exit 1
+fi
+
+echo
+echo "=========================================="
+echo "       Setup Complete!                    "
+echo "=========================================="
+echo "You can now run the UDC Maintenance Script:"
+echo "  sudo ./UDC_Current_REG_v7.sh"
+echo
+echo "Note: ClamAV database has been initialized."
+echo "      The clamav-freshclam service has been stopped to allow manual updates."
+echo
