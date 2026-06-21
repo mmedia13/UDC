@@ -8,7 +8,7 @@ UDC_LOG_DIR="$LOG_DIR/UDC"
 RKHUNTER_LOG_DIR="$LOG_DIR/rkhunter"
 CLAMAV_LOG_DIR="$LOG_DIR/clamav"
 ERROR_LOG_DIR="$UDC_LOG_DIR/UDC-ERRORS"
-SCRIPT_URL="https://raw.githubusercontent.com/mmedia13/UDC/refs/heads/main/UDC%20Daily%20Current%20(and%20Shutdown)" # Update this if you have a specific URL for this version
+SCRIPT_URL="https://raw.githubusercontent.com/mmedia13/UDC/refs/heads/main/UDC-Daily-Current-(and-Shutdown)" # Update this if you have a specific URL for this version
 KEEP_KERNELS=2
 
 # Create log directories if they don't exist
