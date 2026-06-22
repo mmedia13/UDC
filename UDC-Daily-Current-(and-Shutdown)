@@ -1,6 +1,5 @@
 #!/bin/bash
-# UDC-Shutdown v1.0 - Maintenance Script with Auto-Shutdown
-# Designed for BIOS Scheduled Power-On (e.g., 2:00 AM)
+# UDC-Shutdown v7.0 - Maintenance Script with Auto-Shutdown
 
 # --- Configuration ---
 LOG_DIR="/home/logs"
