@@ -1,0 +1,409 @@
+#!/bin/bash
+# UDC-SETUP v2.0 - Master Setup Script for UDC Maintenance System
+# Features: Multi-script install, Self-logging, Safety checks, Backup management
+# Fixes: Stale lock removal, Timezone warnings, Shutdown safety, Old backup cleanup
+
+# Enable logging to file immediately
+LOG_BASE="/home/logs"
+UDC_DIR="$LOG_BASE/UDC"
+mkdir -p "$UDC_DIR"
+SETUP_LOG="$UDC_DIR/SETUP.log"
+exec > >(tee -a "$SETUP_LOG") 2>&1
+
+set -e
+
+# --- Configuration ---
+RKHUNTER_DIR="$LOG_BASE/rkhunter"
+CLAMAV_DIR="$LOG_BASE/clamav"
+ERROR_DIR="$UDC_DIR/UDC-ERRORS"
+
+# Script URLs
+URL_DAILY_SHUTDOWN="https://raw.githubusercontent.com/mmedia13/UDC/refs/heads/main/UDC-Daily-Current-(and-Shutdown)"
+URL_REGULAR="https://raw.githubusercontent.com/mmedia13/UDC/refs/heads/main/UDC-CURRENT"
+URL_PLEX="https://raw.githubusercontent.com/mmedia13/UDC/refs/heads/main/UDC-CURRENT-PLEX"
+
+INSTALL_PATH="/usr/bin"
+declare -a SCRIPT_NAMES=()
+declare -a URLS=()
+declare -a CRON_TYPES=()
+DEST_PATH=""
+
+# --- Helper Functions ---
+
+log_msg() { echo "[INFO] $(date '+%T'): $1"; }
+log_error() { echo "[ERROR] $(date '+%T'): $1" >&2; }
+
+check_root() {
+    if [ "$EUID" -ne 0 ]; then
+        log_error "This script must be run as root (sudo)."
+        echo "Please run: sudo ./UDC-SETUP"
+        exit 1
+    fi
+}
+
+step_header() {
+    echo ""
+    echo "=========================================="
+    echo "      $1"
+    echo "=========================================="
+}
+
+# --- Step 1: System Preparation ---
+prepare_system() {
+    step_header "System Preparation"
+    
+    log_msg "Creating log directories..."
+    mkdir -p "$UDC_DIR" "$RKHUNTER_DIR" "$CLAMAV_DIR" "$ERROR_DIR"
+    chown -R root:root "$LOG_BASE"
+    chmod -R 755 "$LOG_BASE"
+
+    log_msg "Updating package lists..."
+    apt-get update -y
+
+    REQUIRED_PACKAGES="clamav clamav-daemon freshclam rkhunter deborphan ntpdate curl wget unzip"
+    log_msg "Installing required packages..."
+    apt-get install -y $REQUIRED_PACKAGES
+
+    log_msg "Configuring ClamAV..."
+    # Stop background service to prevent lock conflicts
+    if systemctl is-active --quiet clamav-freshclam 2>/dev/null; then
+        systemctl stop clamav-freshclam
+        systemctl disable clamav-freshclam
+        log_msg "clamav-freshclam service disabled."
+    elif [ -f /etc/init.d/clamav-freshclam ]; then
+        /etc/init.d/clamav-freshclam stop
+    fi
+    
+    # Fix #3: Remove stale lock file to prevent "Database busy" errors
+    rm -f /var/lib/clamav/freshclam.lock
+    log_msg "Stale ClamAV lock file removed if present."
+
+    log_msg "Running initial ClamAV database update..."
+    freshclam || log_error "Initial freshclam update failed."
+
+    log_msg "Configuring RKhunter..."
+    rkhunter --update || true
+    rkhunter --propupd || true
+
+    log_msg "Verifying installation..."
+    MISSING=""
+    for cmd in clamscan freshclam rkhunter deborphan ntpdate curl wget; do
+        command -v $cmd &>/dev/null || MISSING="$MISSING $cmd"
+    done
+    
+    if [ -n "$MISSING" ]; then
+        log_error "Missing tools: $MISSING. Setup incomplete."
+        exit 1
+    fi
+    log_msg "System preparation complete."
+}
+
+# --- Step 2: User Selection (Two Menus with Install Both Option) ---
+select_script() {
+    step_header "Select Environment Type"
+    echo "Which type of computer is this?"
+    echo "1. Desktop/PC with BIOS Scheduled Wakeup (Shuts down after update)"
+    echo "   -> Uses Option A Menu below"
+    echo "2. Server/Always-On Machine (Never shuts down automatically)"
+    echo "   -> Uses Option B Menu below"
+    echo ""
+    read -p "Enter choice (1 or 2): " ENV_CHOICE
+
+    case $ENV_CHOICE in
+        1)
+            select_submenu_a
+            ;;
+        2)
+            select_submenu_b
+            ;;
+        *)
+            log_error "Invalid environment selection."
+            exit 1
+            ;;
+    esac
+}
+
+select_submenu_a() {
+    step_header "Option A: BIOS Wakeup Selection"
+    echo "Available Scripts:"
+    echo "1. updateandcleandaily (Shuts down PC at end - Requires 1:45 AM BIOS Wakeup)"
+    echo "2. updateandclean (Runs daily but keeps PC ON)"
+    echo "3. INSTALL BOTH (Installs both scripts above)"
+    echo ""
+    read -p "Enter choice (1, 2, or 3): " CHOICE
+
+    case $CHOICE in
+        1)
+            SCRIPT_NAMES=("updateandcleandaily")
+            URLs=("$URL_DAILY_SHUTDOWN")
+            CRON_TYPES=("daily_shutdown")
+            ;;
+        2)
+            SCRIPT_NAMES=("updateandclean")
+            URLs=("$URL_REGULAR")
+            CRON_TYPES=("regular_wakeon")
+            ;;
+        3)
+            SCRIPT_NAMES=("updateandcleandaily" "updateandclean")
+            URLs=("$URL_DAILY_SHUTDOWN" "$URL_REGULAR")
+            CRON_TYPES=("daily_shutdown" "regular_wakeon")
+            log_msg "You selected to install BOTH scripts."
+            ;;
+        *)
+            log_error "Invalid selection."
+            exit 1
+            ;;
+    esac
+}
+
+select_submenu_b() {
+    step_header "Option B: Server/Plex Selection"
+    echo "Available Scripts:"
+    echo "1. updateandclean (Standard Daily Maintenance)"
+    echo "2. updateandclean-PLEX (Plex Specific Maintenance)"
+    echo "3. INSTALL BOTH (Installs both scripts above)"
+    echo ""
+    read -p "Enter choice (1, 2, or 3): " CHOICE
+
+    case $CHOICE in
+        1)
+            SCRIPT_NAMES=("updateandclean")
+            URLs=("$URL_REGULAR")
+            CRON_TYPES=("regular")
+            ;;
+        2)
+            SCRIPT_NAMES=("updateandclean-PLEX")
+            URLs=("$URL_PLEX")
+            CRON_TYPES=("plex")
+            ;;
+        3)
+            SCRIPT_NAMES=("updateandclean" "updateandclean-PLEX")
+            URLs=("$URL_REGULAR" "$URL_PLEX")
+            CRON_TYPES=("regular" "plex")
+            log_msg "You selected to install BOTH scripts."
+            ;;
+        *)
+            log_error "Invalid selection."
+            exit 1
+            ;;
+    esac
+}
+
+# --- Step 3: Download & Install (Multi-Script Support) ---
+install_scripts() {
+    step_header "Downloading and Installing Script(s)"
+    
+    local TOTAL=${#SCRIPT_NAMES[@]}
+    local CURRENT=0
+
+    # Check Internet connectivity before downloading all
+    log_msg "Checking internet connectivity..."
+    if ! ping -c 3 -W 5 github.com &>/dev/null; then
+        log_error "No internet connection detected. Cannot download scripts."
+        exit 1
+    fi
+
+    for i in "${!SCRIPT_NAMES[@]}"; do
+        CURRENT=$((CURRENT + 1))
+        local NAME="${SCRIPT_NAMES[$i]}"
+        local URL="${URLS[$i]}"
+        local DEST="$INSTALL_PATH/$NAME"
+        
+        log_msg "--- Installing Script $CURRENT of $TOTAL: $NAME ---"
+        
+        # Backup existing file
+        if [ -f "$DEST" ]; then
+            log_msg "Existing installation found. Backing up to ${DEST}.bak.$(date +%s)..."
+            mv "$DEST" "${DEST}.bak.$(date +%s)"
+        fi
+
+        log_msg "Downloading $NAME from GitHub..."
+        if ! curl -sSL "$URL" -o "$DEST"; then
+            log_error "Failed to download script from $URL"
+            continue  # Continue with next script instead of aborting all
+        fi
+
+        # Validate Content
+        if ! head -n 1 "$DEST" | grep -q "^#!"; then
+            log_error "Downloaded content is not a valid script (missing shebang). Skipping."
+            rm -f "$DEST"
+            continue
+        fi
+
+        chmod +x "$DEST"
+        log_msg "Script installed to: $DEST"
+        log_msg "Made executable."
+    done
+    
+    # Store first script path for immediate run option
+    DEST_PATH="$INSTALL_PATH/${SCRIPT_NAMES[0]}"
+    
+    log_msg "All script downloads completed."
+}
+
+# --- Step 4: Cron Configuration (Multi-Script Support) ---
+setup_cron() {
+    step_header "Configuring Cron Job(s)"
+    
+    # Clean up old entries first
+    log_msg "Cleaning up old UDC cron jobs..."
+    crontab -l 2>/dev/null | grep -v "updateandclean" | grep -v "updateandcleandaily" | grep -v "updateandclean-PLEX" | crontab - || true
+    
+    local TIME="02:00"
+    local HAS_CRON=false
+
+    for i in "${!SCRIPT_NAMES[@]}"; do
+        local NAME="${SCRIPT_NAMES[$i]}"
+        local TYPE="${CRON_TYPES[$i]}"
+        local COMMAND="$INSTALL_PATH/$NAME >> $UDC_DIR/cron.log 2>&1"
+        
+        if [ "$TYPE" != "regular" ] && [ "$TYPE" != "regular_wakeon" ]; then
+            log_msg "Adding cron job for $NAME at $TIME every day..."
+            (crontab -l 2>/dev/null | grep -v "$NAME"; echo "$TIME * * * * $COMMAND") | crontab -
+            HAS_CRON=true
+        else
+            log_msg "No auto-cron for $NAME (Manual mode)."
+        fi
+    done
+    
+    if [ "$HAS_CRON" = true ]; then
+        log_msg "Cron job(s) added successfully."
+    fi
+    
+    # Print BIOS reminder if any shutdown script is installed
+    for TYPE in "${CRON_TYPES[@]}"; do
+        if [ "$TYPE" == "daily_shutdown" ]; then
+            echo ""
+            echo "⚠️  IMPORTANT REMINDER ⚠️"
+            echo "You have 'updateandcleandaily' installed. The computer MUST turn on via BIOS."
+            echo "Please set your BIOS RTC Alarm/Wake Time to: ** 01:45 AM **"
+            echo ""
+            break
+        fi
+    done
+}
+
+# --- Step 5: Optional Execution (With Safety Guard) ---
+run_now() {
+    step_header "Run Script Now?"
+    
+    # List available scripts to choose from
+    echo "Available installed scripts:"
+    for i in "${!SCRIPT_NAMES[@]}"; do
+        echo "  $((i+1)). ${SCRIPT_NAMES[$i]}"
+    done
+    echo "  0. Skip (do not run now)"
+    echo ""
+    
+    # Safety Confirmation for Shutdown Script
+    if [[ " ${SCRIPT_NAMES[*]} " =~ " updateandcleandaily " ]]; then
+        echo "⛔ SAFETY WARNING ⛔"
+        echo "One of your installed scripts ('updateandcleandaily') WILL SHUT DOWN your computer."
+        echo "If you are connected via SSH, you will lose connection immediately."
+        echo ""
+        read -p "Do you want to run updateandcleandaily now? Type 'YES' to confirm: " CONFIRM
+        if [[ "$CONFIRM" == "YES" ]]; then
+            log_msg "Starting updateandcleandaily..."
+            echo "----------------------------------------"
+            "$INSTALL_PATH/updateandcleandaily"
+            EXIT_CODE=$?
+            echo "----------------------------------------"
+            if [ $EXIT_CODE -eq 0 ]; then
+                log_msg "updateandcleandaily launched successfully."
+            else
+                log_error "updateandcleandaily exited with code $EXIT_CODE."
+            fi
+            # Fix #1: Exit immediately after launching shutdown script
+            log_msg "Exiting setup script after shutdown launch."
+            exit 0
+        else
+            log_msg "Skipping updateandcleandaily execution."
+        fi
+    fi
+    
+    # Ask about other scripts
+    if [ ${#SCRIPT_NAMES[@]} -gt 0 ]; then
+        read -p "Do you want to run any other installed script immediately? (y/n): " RUN_NOW
+        if [[ "$RUN_NOW" =~ ^[Yy]$ ]]; then
+            for NAME in "${SCRIPT_NAMES[@]}"; do
+                if [ "$NAME" != "updateandcleandaily" ]; then
+                    log_msg "Starting $NAME..."
+                    echo "----------------------------------------"
+                    "$INSTALL_PATH/$NAME"
+                    EXIT_CODE=$?
+                    echo "----------------------------------------"
+                    if [ $EXIT_CODE -eq 0 ]; then
+                        log_msg "$NAME completed successfully."
+                    else
+                        log_error "$NAME exited with code $EXIT_CODE."
+                    fi
+                fi
+            done
+        else
+            log_msg "Skipping immediate execution."
+        fi
+    fi
+}
+
+# --- Final Summary ---
+final_report() {
+    step_header "Setup Complete"
+    
+    # Fix #2: Check and warn about timezone
+    log_msg "Checking system timezone..."
+    CURRENT_TZ=$(timedatectl 2>/dev/null | grep "Time zone" | awk '{print $3}')
+    if [[ "$CURRENT_TZ" == "UTC" ]]; then
+        log_msg "⚠️ WARNING: System timezone is UTC."
+        echo "   Your 2 AM cron jobs will run at 2 AM UTC, NOT your local time."
+        echo "   To fix: Run 'timedatectl list-timezones' and find yours, then:"
+        echo "   timedatectl set-timezone <Your_Timezone>"
+        echo "   Example: timedatectl set-timezone America/New_York"
+        echo ""
+    fi
+    
+    echo ""
+    echo "Summary of actions performed:"
+    echo "1. ✅ System directories created ($LOG_BASE)."
+    echo "2. ✅ Tools installed (ClamAV, RKhunter, etc.)."
+    echo "3. ✅ Script(s) installed to $INSTALL_PATH:"
+    for NAME in "${SCRIPT_NAMES[@]}"; do
+        echo "     - $NAME"
+    done
+    
+    # Check if any cron jobs were scheduled
+    for TYPE in "${CRON_TYPES[@]}"; do
+        if [ "$TYPE" == "daily_shutdown" ] || [ "$TYPE" == "plex" ]; then
+            echo "4. ✅ Cron job(s) scheduled for 02:00 AM daily."
+            break
+        fi
+    done
+    
+    if [[ " ${CRON_TYPES[*]} " =~ " daily_shutdown " ]]; then
+        echo "5. ⚠️  REMEMBER: Set BIOS Wake-up time to 01:45 AM!"
+    fi
+    
+    echo ""
+    echo "📝 Full setup log saved to: $SETUP_LOG"
+    echo "Logs stored in: $LOG_BASE"
+    echo "To run manually anytime: sudo $INSTALL_PATH/<script_name>"
+    echo ""
+    echo "🎉 All tasks completed successfully!"
+    echo ""
+}
+
+# --- Cleanup Old Backups (Fix #5) ---
+cleanup_old_backups() {
+    log_msg "Cleaning up old script backups (>30 days)..."
+    find /usr/bin -maxdepth 1 -name "*.bak.*" -mtime +30 -delete 2>/dev/null || true
+    log_msg "Old backup cleanup complete."
+}
+
+# --- Main Execution Flow ---
+check_root
+prepare_system
+select_script
+install_scripts
+cleanup_old_backups
+setup_cron
+run_now
+final_report
