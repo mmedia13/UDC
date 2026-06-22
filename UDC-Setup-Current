@@ -1,32 +1,19 @@
 #!/bin/bash
-# UDC-SETUP v2.0 - Master Setup Script for UDC Maintenance System
-# Features: Multi-script install, Self-logging, Safety checks, Backup management
-# Fixes: Stale lock removal, Timezone warnings, Shutdown safety, Old backup cleanup
+# UDC-SETUP v2.1 - Master Setup Script with Self-Update Capability
+# Features: Auto-Update from GitHub, Multi-script install, Safety checks, Timezone warnings
+# URL: https://raw.githubusercontent.com/mmedia13/UDC/refs/heads/main/UDC-Setup-Current
 
-# Enable logging to file immediately
+# --- Configuration ---
 LOG_BASE="/home/logs"
 UDC_DIR="$LOG_BASE/UDC"
 mkdir -p "$UDC_DIR"
 SETUP_LOG="$UDC_DIR/SETUP.log"
+SCRIPT_URL="https://raw.githubusercontent.com/mmedia13/UDC/refs/heads/main/UDC-Setup-Current"
+
+# Enable logging to file immediately
 exec > >(tee -a "$SETUP_LOG") 2>&1
 
 set -e
-
-# --- Configuration ---
-RKHUNTER_DIR="$LOG_BASE/rkhunter"
-CLAMAV_DIR="$LOG_BASE/clamav"
-ERROR_DIR="$UDC_DIR/UDC-ERRORS"
-
-# Script URLs
-URL_DAILY_SHUTDOWN="https://raw.githubusercontent.com/mmedia13/UDC/refs/heads/main/UDC-Daily-Current-(and-Shutdown)"
-URL_REGULAR="https://raw.githubusercontent.com/mmedia13/UDC/refs/heads/main/UDC-CURRENT"
-URL_PLEX="https://raw.githubusercontent.com/mmedia13/UDC/refs/heads/main/UDC-CURRENT-PLEX"
-
-INSTALL_PATH="/usr/bin"
-declare -a SCRIPT_NAMES=()
-declare -a URLS=()
-declare -a CRON_TYPES=()
-DEST_PATH=""
 
 # --- Helper Functions ---
 
@@ -46,6 +33,50 @@ step_header() {
     echo "=========================================="
     echo "      $1"
     echo "=========================================="
+}
+
+# --- Step 0: SELF-UPDATE CHECK (The New Feature) ---
+check_self_update() {
+    local temp_file="/tmp/udc_setup_update_$$_$(date +%s)"
+    
+    log_msg "Checking for script updates..."
+    
+    # Download potential update
+    if ! curl -sSL "$SCRIPT_URL" -o "$temp_file"; then
+        log_msg "Failed to download update from GitHub. Continuing with current version."
+        rm -f "$temp_file"
+        return 1
+    fi
+
+    # Validate downloaded content
+    if ! head -n 1 "$temp_file" | grep -q "^#!"; then
+        log_msg "Downloaded content is not a valid script. Skipping update."
+        rm -f "$temp_file"
+        return 1
+    fi
+
+    # Compare current script with downloaded one
+    if diff -q "$0" "$temp_file" > /dev/null 2>&1; then
+        log_msg "Script is up to date."
+        rm -f "$temp_file"
+        return 0
+    else
+        log_msg "New version detected! Backing up and updating..."
+        
+        # Backup current script
+        local backup_name="${0}.bak.$(date +%s)"
+        cp "$0" "$backup_name"
+        log_msg "Backup created: $backup_name"
+        
+        # Replace current script with new one
+        mv "$temp_file" "$0"
+        chmod +x "$0"
+        
+        log_msg "Script updated successfully. Restarting with new version..."
+        # Execute the NEW script with all original arguments
+        exec "$0" "$@"
+        exit 0
+    fi
 }
 
 # --- Step 1: System Preparation ---
@@ -313,7 +344,7 @@ run_now() {
             else
                 log_error "updateandcleandaily exited with code $EXIT_CODE."
             fi
-            # Fix #1: Exit immediately after launching shutdown script
+            # Exit immediately after launching shutdown script
             log_msg "Exiting setup script after shutdown launch."
             exit 0
         else
@@ -349,7 +380,7 @@ run_now() {
 final_report() {
     step_header "Setup Complete"
     
-    # Fix #2: Check and warn about timezone
+    # Check and warn about timezone
     log_msg "Checking system timezone..."
     CURRENT_TZ=$(timedatectl 2>/dev/null | grep "Time zone" | awk '{print $3}')
     if [[ "$CURRENT_TZ" == "UTC" ]]; then
@@ -391,7 +422,7 @@ final_report() {
     echo ""
 }
 
-# --- Cleanup Old Backups (Fix #5) ---
+# --- Cleanup Old Backups ---
 cleanup_old_backups() {
     log_msg "Cleaning up old script backups (>30 days)..."
     find /usr/bin -maxdepth 1 -name "*.bak.*" -mtime +30 -delete 2>/dev/null || true
@@ -400,6 +431,7 @@ cleanup_old_backups() {
 
 # --- Main Execution Flow ---
 check_root
+check_self_update  # <-- THE NEW FEATURE: Checks for update before doing anything
 prepare_system
 select_script
 install_scripts
