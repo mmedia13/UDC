@@ -1,0 +1,314 @@
+#!/bin/bash
+# UDC-Shutdown v7.0 - Maintenance Script with Auto-Shutdown
+
+# --- Configuration ---
+LOG_DIR="/home/logs"
+UDC_LOG_DIR="$LOG_DIR/UDC"
+RKHUNTER_LOG_DIR="$LOG_DIR/rkhunter"
+CLAMAV_LOG_DIR="$LOG_DIR/clamav"
+ERROR_LOG_DIR="$UDC_LOG_DIR/UDC-ERRORS"
+SCRIPT_URL="https://raw.githubusercontent.com/mmedia13/UDC/refs/heads/main/UDC-Daily-Current-(and-Shutdown)" # Update this if you have a specific URL for this version
+KEEP_KERNELS=2
+
+# Create log directories if they don't exist
+mkdir -p "$UDC_LOG_DIR" "$RKHUNTER_LOG_DIR" "$CLAMAV_LOG_DIR" "$ERROR_LOG_DIR"
+
+# Set log file paths
+DATE_STR=$(date +%m.%d.%y)
+TIME_STR=$(date +%H.%M.%S)
+LOGFILE="$UDC_LOG_DIR/UpdateNClean.log-$DATE_STR"
+LOGFILE2="$RKHUNTER_LOG_DIR/RKhunter.log-$DATE_STR"
+LOGFILE3="$CLAMAV_LOG_DIR/ClamAV.log-$DATE_STR"
+ERRORLOG="$ERROR_LOG_DIR/UDC-ERROR-Log-${DATE_STR}_${TIME_STR}"
+
+# --- Functions ---
+
+log_error() {
+    echo "[ERROR] $(date "+%T"): $1" >> "$ERRORLOG"
+    echo "[ERROR] $(date "+%T"): $1" >&2
+}
+
+check_exit_status() {
+    if [ $? -eq 0 ]; then
+        echo "          ^ Process Completed ^" >> "$LOGFILE"
+    else
+        echo "          ^ [ERROR] Process Failed! ^" >> "$LOGFILE"
+        log_error "Process failed (Exit Code: $?)"
+    fi
+}
+
+# --- System Update Functions ---
+
+update() {
+    echo
+    echo "** Update Time and Date **"
+    echo "$(date "+%T") :   - Update Time and Date" >> "$LOGFILE"
+    sudo ntpdate pool.ntp.org || log_error "ntpdate failed"
+    check_exit_status
+
+    echo
+    echo "** Update package lists for upgrades **"
+    echo "$(date "+%T") :   - Update package lists for upgrades" >> "$LOGFILE"
+    sudo apt-get update
+    check_exit_status
+
+    echo
+    echo "** Upgrade System to new release (if Available) **"
+    echo "$(date "+%T") :   - Upgrade System to new release (if Available)" >> "$LOGFILE"
+    if command -v do-release-upgrade &>/dev/null; then
+        sudo do-release-upgrade -f DistUpgradeViewNonInteractive >> "$LOGFILE" 2>&1
+        check_exit_status
+    else
+        echo "do-release-upgrade not found. Skipping release upgrade." >> "$LOGFILE"
+    fi
+
+    echo
+    echo "** Updates packages and libraries **"
+    echo "$(date "+%T") :   - Updates packages and libraries" >> "$LOGFILE"
+    sudo apt-get full-upgrade -y
+    check_exit_status
+
+    echo
+    echo "** Download and install packages as well as remove obsolete packages **"
+    echo "$(date "+%T") :   - Download and install packages as well as remove obsolete packages" >> "$LOGFILE"
+    sudo apt-get dist-upgrade -y
+    check_exit_status
+
+    echo
+    echo "** Update Firefox Browser **"
+    echo "$(date "+%T") :   - Update Firefox Browser" >> "$LOGFILE"
+    sudo apt-get install firefox -y
+    check_exit_status
+
+    echo
+    echo "** Finish configuration of partially installed packages **"
+    echo "$(date "+%T") :   - Finish configuration of partially installed packages" >> "$LOGFILE"
+    yes | sudo dpkg --configure -a
+    check_exit_status
+
+    echo
+    echo "** Update ClamAV (if necessary) **"
+    echo "$(date "+%T") :   - Updating ClamAV package..." >> "$LOGFILE"
+    if command -v clamscan &>/dev/null; then
+        sudo apt-get update
+        sudo apt-get install --only-upgrade clamav clamav-daemon -y
+        check_exit_status
+    else
+        echo "ClamAV is not installed. Skipping update." >> "$LOGFILE"
+    fi
+
+    echo
+    echo "** Update virus database **"
+    echo "$(date "+%T") :   - Update virus database" >> "$LOGFILE"
+    if command -v freshclam &>/dev/null; then
+        if systemctl is-active --quiet clamav-freshclam 2>/dev/null; then
+            sudo systemctl stop clamav-freshclam
+        elif [ -f /etc/init.d/clamav-freshclam ]; then
+            sudo /etc/init.d/clamav-freshclam stop
+        fi
+        
+        sudo freshclam
+        check_exit_status
+
+        if systemctl is-active --quiet clamav-freshclam 2>/dev/null; then
+            sudo systemctl start clamav-freshclam
+        elif [ -f /etc/init.d/clamav-freshclam ]; then
+            sudo /etc/init.d/clamav-freshclam start
+        fi
+    else
+        echo "freshclam not found. Skipping database update." >> "$LOGFILE"
+    fi
+
+    echo
+    echo "** Update RKhunter **"
+    echo "$(date "+%T") :   - Update RKhunter" >> "$LOGFILE"
+    if command -v rkhunter &>/dev/null; then
+        sudo rkhunter --update
+        check_exit_status
+        echo
+        echo "** Update RKhunter database **"
+        echo "$(date "+%T") :   - Update RKhunter Database" >> "$LOGFILE"
+        sudo rkhunter --propupd
+        check_exit_status
+    else
+        echo "rkhunter not found. Skipping." >> "$LOGFILE"
+    fi
+}
+
+# --- Housekeeping Functions ---
+
+housekeeping() {
+    echo
+    echo "$(date "+%m/%d/%Y @ %T") :   CLEANING" >> "$LOGFILE"
+    echo "*--------------------------------------*"
+    echo "*                                      *"
+    echo "*            HOUSEKEEPING!            *"
+    echo "*                                      *"
+    echo "*--------------------------------------*"
+
+    echo
+    echo "** Clean up Kernels **"
+    echo "$(date "+%T") :   - Purge old kernels" >> "$LOGFILE"
+
+    CURRENT_KERNEL=$(uname -r)
+    CURRENT_VER=$(echo "$CURRENT_KERNEL" | sed 's/-.*//')
+    
+    INSTALLED_KERNELS=$(dpkg -l 'linux-image-*' 'linux-headers-*' 2>/dev/null | awk '/^ii/ {print $2}' | sort -V -r)
+    
+    COUNT=0
+    PURGE_LIST=""
+    
+    for KERNEL_PKG in $INSTALLED_KERNELS; do
+        COUNT=$((COUNT + 1))
+        PKG_VER=$(echo "$KERNEL_PKG" | sed -n 's/linux-image-\([0-9.]*\).*/\1/p' | sed -n 's/linux-headers-\([0-9.]*\).*/\1/p')
+        
+        if [ "$COUNT" -le "$KEEP_KERNELS" ]; then continue; fi
+        if [ "$PKG_VER" = "$CURRENT_VER" ]; then continue; fi
+        
+        if dpkg -l "$KERNEL_PKG" &>/dev/null; then
+            PURGE_LIST="$PURGE_LIST $KERNEL_PKG"
+        fi
+    done
+
+    if [ -z "$PURGE_LIST" ]; then
+        echo "No old kernels found for removal." >> "$LOGFILE"
+    else
+        echo "Removing old kernels: $PURGE_LIST" >> "$LOGFILE"
+        sudo apt-get remove -y --purge $PURGE_LIST
+        check_exit_status
+    fi
+
+    echo
+    echo "** Remove unused config files **"
+    if command -v deborphan &>/dev/null; then
+        sudo deborphan -n --find-config | xargs -r sudo apt-get -y --purge autoremove >> "$LOGFILE" 2>&1
+        check_exit_status
+    else
+        echo "deborphan not found. Skipping orphan check." >> "$LOGFILE"
+    fi
+
+    echo
+    echo "** Clear local repository of retrieved package files **"
+    echo "$(date "+%T") :   - Clear local repository" >> "$LOGFILE"
+    sudo apt-get autoclean -y >> "$LOGFILE" 2>&1
+    check_exit_status
+
+    echo
+    echo "** Uninstall unneeded packages and config files **"
+    echo "$(date "+%T") :   - Autoremove unneeded packages" >> "$LOGFILE"
+    sudo apt-get autoremove --purge -y >> "$LOGFILE" 2>&1
+    check_exit_status
+
+    echo
+    echo "** Clear out local repository of downloaded package files **"
+    echo "$(date "+%T") :   - Clean package cache" >> "$LOGFILE"
+    sudo apt-get clean -y >> "$LOGFILE" 2>&1
+    check_exit_status
+
+    echo
+    echo "** Completely purge previously installed packages and config files **"
+    echo "$(date "+%T") :   - Purge rc packages" >> "$LOGFILE"
+    RC_PACKAGES=$(dpkg -l | awk '/^rc/ { print $2 }')
+    if [ -n "$RC_PACKAGES" ]; then
+        sudo apt-get purge $RC_PACKAGES -y >> "$LOGFILE" 2>&1
+        check_exit_status
+    else
+        echo "No rc packages to purge." >> "$LOGFILE"
+    fi
+
+    echo
+    echo "** Scan for infected files and remove **"
+    echo "$(date "+%T") :   - ClamAV Scan" >> "$LOGFILE"
+    if command -v clamscan &>/dev/null; then
+        sudo clamscan -r --remove --infected /home/ >> "$LOGFILE3" 2>&1
+        check_exit_status
+    else
+        echo "ClamAV not found. Skipping scan." >> "$LOGFILE"
+    fi
+
+    echo
+    echo "** Scan for Root Kits **"
+    echo "$(date "+%T") :   - RKhunter Scan" >> "$LOGFILE"
+    if command -v rkhunter &>/dev/null; then
+        sudo rkhunter --check --sk >> "$LOGFILE2" 2>&1
+        check_exit_status
+    else
+        echo "rkhunter not found. Skipping scan." >> "$LOGFILE"
+    fi
+
+    echo
+    echo "** Remove Log Files older than 32 Days **"
+    echo "$(date "+%T") :   - Cleanup old logs" >> "$LOGFILE"
+    shopt -s nullglob
+    OLD_LOGS=(/home/logs/*)
+    if [ ${#OLD_LOGS[@]} -gt 0 ]; then
+        find /home/logs -maxdepth 1 -type f -mtime +32 -delete >> "$LOGFILE" 2>&1
+        find /home/logs -maxdepth 1 -type d -empty -delete >> "$LOGFILE" 2>&1
+    fi
+    check_exit_status
+    shopt -u nullglob
+
+    echo
+    echo "** Update database **"
+    echo "$(date "+%T") :   - Updatedb" >> "$LOGFILE"
+    sudo updatedb
+    check_exit_status
+
+    echo
+    echo "** Update & Clean Complete **"
+    echo "$(date "+%T") :   - Update & Clean Script Complete" >> "$LOGFILE"
+}
+
+# --- Shutdown Function ---
+
+perform_shutdown() {
+    echo
+    echo "=========================================="
+    echo "       Shutting Down System...           "
+    echo "=========================================="
+    echo "$(date "+%T") :   - System shutdown initiated by maintenance script" >> "$LOGFILE"
+    
+    # Optional: Check if any users are online before shutting down
+    # USERS=$(who | wc -l)
+    # if [ "$USERS" -gt 1 ]; then
+    #     echo "Warning: Other users detected ($USERS). Shutdown may interrupt them." >> "$LOGFILE"
+    # fi
+
+    # Shutdown immediately or delay? 
+    # Using 'now' ensures it shuts down as soon as the script finishes.
+    sudo shutdown -h now "Maintenance Complete - BIOS Wakeup at 2AM"
+    
+    # If the shutdown command fails, we just exit
+    check_exit_status
+    
+    # Fallback: If shutdown didn't work (rare), power off directly
+    echo "If system did not shut down, attempting forced poweroff..." >> "$LOGFILE"
+    sudo poweroff -f
+}
+
+# --- Main Execution ---
+
+{
+    echo
+    echo "==========================================="
+    echo "       -: UDC Shutdown Script :-          "
+    echo "==========================================="
+    echo
+    echo "$(date "+%m/%d/%Y @ %T") : ******** Maintenance Started! ********" >> "$LOGFILE"
+    echo
+
+    # Initial apt upgrade
+    sudo apt-get upgrade -y
+    check_exit_status
+
+    # Run general system update
+    update
+    
+    # Run housekeeping
+    housekeeping
+
+    # Perform Shutdown (No reboot check here, we always shut down for BIOS schedule)
+    perform_shutdown
+
+    echo "$(date "+%m/%d/%Y @ %T") : ******** Maintenance Script Ended (Shutting Down) ********" >> "$LOGFILE"
+} 2>> "$ERRORLOG"
