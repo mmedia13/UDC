@@ -1,6 +1,6 @@
 #!/bin/bash
-# UDC-SETUP v2.2 - Master Setup Script with Fixed Self-Update Logic
-# Features: Auto-Update from GitHub (after curl install), Multi-script install, Safety checks
+# UDC-SETUP v2.5 - Self-Updating Master Script (Updates Current File Path)
+# Features: Auto-Update (replaces current file), Proper Repo/Update Sequence, Resilient Error Handling
 # URL: https://raw.githubusercontent.com/mmedia13/UDC/refs/heads/main/UDC-Setup-Current
 
 # --- Configuration ---
@@ -13,12 +13,14 @@ SCRIPT_URL="https://raw.githubusercontent.com/mmedia13/UDC/refs/heads/main/UDC-S
 # Enable logging to file immediately
 exec > >(tee -a "$SETUP_LOG") 2>&1
 
-set -e
+# Remove 'set -e' to handle errors gracefully
+# set -e 
 
 # --- Helper Functions ---
 
 log_msg() { echo "[INFO] $(date '+%T'): $1"; }
 log_error() { echo "[ERROR] $(date '+%T'): $1" >&2; }
+log_warning() { echo "[WARNING] $(date '+%T'): $1"; }
 
 check_root() {
     if [ "$EUID" -ne 0 ]; then
@@ -35,32 +37,32 @@ step_header() {
     echo "=========================================="
 }
 
-# --- Step 0: Minimal Dependency Install (FIXED) ---
-# We MUST install curl/wget BEFORE trying to self-update.
+# --- Step 0: Minimal Dependency Install ---
 install_minimal_deps() {
     step_header "Installing Minimal Dependencies"
     
-    log_msg "Updating package lists..."
-    apt-get update -y
+    log_msg "Updating package lists for basic tools..."
+    apt-get update -y || log_error "Failed to update package lists initially."
     
-    MINIMAL_PACKAGES="curl wget"
-    log_msg "Installing $MINIMAL_PACKAGES to enable self-update..."
+    MINIMAL_PACKAGES="curl wget software-properties-common gnupg2" 
+    log_msg "Installing $MINIMAL_PACKAGES..."
     apt-get install -y --no-install-recommends $MINIMAL_PACKAGES
     
-    # Verify they work
     if ! command -v curl &>/dev/null || ! command -v wget &>/dev/null; then
-        log_error "Failed to install curl or wget. Cannot proceed."
+        log_error "CRITICAL: Failed to install curl or wget. Cannot proceed."
         exit 1
     fi
     
     log_msg "Minimal dependencies ready."
 }
 
-# --- Step 0.5: SELF-UPDATE CHECK (Now safe) ---
+# --- Step 0.5: SELF-UPDATE CHECK (Replaces Current File) ---
 check_self_update() {
     local temp_file="/tmp/udc_setup_update_$$_$(date +%s)"
-    
+    local current_script_path="$0" # Stores the full path of the running script
+
     log_msg "Checking for script updates from GitHub..."
+    log_msg "Current script location: $current_script_path"
     
     # Download potential update
     if ! curl -sSL "$SCRIPT_URL" -o "$temp_file"; then
@@ -77,26 +79,33 @@ check_self_update() {
     fi
 
     # Compare current script with downloaded one
-    if diff -q "$0" "$temp_file" > /dev/null 2>&1; then
-        log_msg "Script is up to date."
+    if diff -q "$current_script_path" "$temp_file" > /dev/null 2>&1; then
+        log_msg "Script is up to date at: $current_script_path"
         rm -f "$temp_file"
         return 0
     else
-        log_msg "New version detected! Backing up and updating..."
+        log_msg "New version detected! Backing up and updating CURRENT file: $current_script_path..."
         
         # Backup current script
-        local backup_name="${0}.bak.$(date +%s)"
-        cp "$0" "$backup_name"
+        local backup_name="${current_script_path}.bak.$(date +%s)"
+        cp "$current_script_path" "$backup_name"
         log_msg "Backup created: $backup_name"
         
-        # Replace current script with new one
-        mv "$temp_file" "$0"
-        chmod +x "$0"
-        
-        log_msg "Script updated successfully. Restarting with new version..."
-        # Execute the NEW script with all original arguments
-        exec "$0" "$@"
-        exit 0
+        # Move new version over the CURRENT running file path
+        if mv "$temp_file" "$current_script_path"; then
+            chmod +x "$current_script_path"
+            log_msg "Successfully replaced the old version with the new one at: $current_script_path"
+            
+            # Execute the NEW file immediately (this replaces the running process)
+            log_msg "Restarting execution with the new version..."
+            exec "$current_script_path" "$@"
+            exit 0
+        else
+            log_error "CRITICAL: Failed to overwrite the current script file. Aborting."
+            log_error "You may need to manually replace '$current_script_path'."
+            rm -f "$temp_file"
+            return 1
+        fi
     fi
 }
 
@@ -109,45 +118,59 @@ prepare_system() {
     chown -R root:root "$LOG_BASE"
     chmod -R 755 "$LOG_BASE"
 
+    # 1. ADD REPOSITORY FIRST
+    log_msg "Enabling 'universe' repository (Required for ClamAV/RKhunter)..."
+    add-apt-repository universe -y >> "$SETUP_LOG" 2>&1 || log_warning "Could not add universe repo."
+
+    # 2. UPDATE IMMEDIATELY AFTER ADDING REPO (CRITICAL FIX)
+    log_msg "Running apt-get update to refresh package lists..."
+    if ! apt-get update -y; then
+        log_error "CRITICAL: Failed to update package lists."
+        exit 1
+    fi
+
+    # 3. NOW INSTALL PACKAGES
     REQUIRED_PACKAGES="clamav clamav-daemon freshclam rkhunter deborphan ntpdate unzip"
     log_msg "Installing full suite of packages: $REQUIRED_PACKAGES..."
-    apt-get install -y $REQUIRED_PACKAGES
-
-    log_msg "Configuring ClamAV..."
-    # Stop background service to prevent lock conflicts
-    if systemctl is-active --quiet clamav-freshclam 2>/dev/null; then
-        systemctl stop clamav-freshclam
-        systemctl disable clamav-freshclam
-        log_msg "clamav-freshclam service disabled."
-    elif [ -f /etc/init.d/clamav-freshclam ]; then
-        /etc/init.d/clamav-freshclam stop
-    fi
     
-    # Remove stale lock file
-    rm -f /var/lib/clamav/freshclam.lock
-    log_msg "Stale ClamAV lock file removed if present."
+    if ! apt-get install -y $REQUIRED_PACKAGES; then
+        log_error "CRITICAL: Failed to install essential security packages."
+        log_error "Check logs at $SETUP_LOG."
+    fi
 
-    log_msg "Running initial ClamAV database update..."
-    freshclam || log_error "Initial freshclam update failed."
-
-    log_msg "Configuring RKhunter..."
-    rkhunter --update || true
-    rkhunter --propupd || true
-
-    log_msg "Verifying installation..."
+    # Verify critical tools
     MISSING=""
     for cmd in clamscan freshclam rkhunter deborphan ntpdate curl wget; do
         command -v $cmd &>/dev/null || MISSING="$MISSING $cmd"
     done
     
     if [ -n "$MISSING" ]; then
-        log_error "Missing tools: $MISSING. Setup incomplete."
-        exit 1
+        log_error "⚠️ WARNING: Some tools are missing: $MISSING."
+    else
+        log_msg "All critical tools verified."
+        
+        log_msg "Configuring ClamAV..."
+        if systemctl is-active --quiet clamav-freshclam 2>/dev/null; then
+            systemctl stop clamav-freshclam
+            systemctl disable clamav-freshclam
+            log_msg "clamav-freshclam service disabled."
+        elif [ -f /etc/init.d/clamav-freshclam ]; then
+            /etc/init.d/clamav-freshclam stop
+        fi
+        
+        rm -f /var/lib/clamav/freshclam.lock
+        log_msg "Running initial ClamAV database update..."
+        freshclam || log_error "Initial freshclam update failed."
+
+        log_msg "Configuring RKhunter..."
+        rkhunter --update || true
+        rkhunter --propupd || true
     fi
-    log_msg "System preparation complete."
+    
+    log_msg "System preparation phase complete."
 }
 
-# --- Step 2: User Selection (Two Menus) ---
+# --- Step 2: User Selection ---
 select_script() {
     step_header "Select Environment Type"
     echo "Which type of computer is this?"
@@ -159,280 +182,159 @@ select_script() {
     read -p "Enter choice (1 or 2): " ENV_CHOICE
 
     case $ENV_CHOICE in
-        1)
-            select_submenu_a
-            ;;
-        2)
-            select_submenu_b
-            ;;
-        *)
-            log_error "Invalid environment selection."
-            exit 1
-            ;;
+        1) select_submenu_a ;;
+        2) select_submenu_b ;;
+        *) log_error "Invalid environment selection."; exit 1 ;;
     esac
 }
 
 select_submenu_a() {
     step_header "Option A: BIOS Wakeup Selection"
-    echo "Available Scripts:"
-    echo "1. updateandcleandaily (Shuts down PC at end - Requires 1:45 AM BIOS Wakeup)"
-    echo "2. updateandclean (Runs daily but keeps PC ON)"
-    echo "3. INSTALL BOTH (Installs both scripts above)"
+    echo "1. updateandcleandaily (Shuts down PC - Requires 1:45 AM BIOS Wakeup)"
+    echo "2. updateandclean (Runs daily, keeps PC ON)"
+    echo "3. INSTALL BOTH"
     echo ""
     read -p "Enter choice (1, 2, or 3): " CHOICE
-
     case $CHOICE in
-        1)
-            SCRIPT_NAMES=("updateandcleandaily")
-            URLs=("$URL_DAILY_SHUTDOWN")
-            CRON_TYPES=("daily_shutdown")
-            ;;
-        2)
-            SCRIPT_NAMES=("updateandclean")
-            URLs=("$URL_REGULAR")
-            CRON_TYPES=("regular_wakeon")
-            ;;
-        3)
-            SCRIPT_NAMES=("updateandcleandaily" "updateandclean")
-            URLs=("$URL_DAILY_SHUTDOWN" "$URL_REGULAR")
-            CRON_TYPES=("daily_shutdown" "regular_wakeon")
-            log_msg "You selected to install BOTH scripts."
-            ;;
-        *)
-            log_error "Invalid selection."
-            exit 1
-            ;;
+        1) SCRIPT_NAMES=("updateandcleandaily"); URLs=("$URL_DAILY_SHUTDOWN"); CRON_TYPES=("daily_shutdown") ;;
+        2) SCRIPT_NAMES=("updateandclean"); URLs=("$URL_REGULAR"); CRON_TYPES=("regular_wakeon") ;;
+        3) SCRIPT_NAMES=("updateandcleandaily" "updateandclean"); URLs=("$URL_DAILY_SHUTDOWN" "$URL_REGULAR"); CRON_TYPES=("daily_shutdown" "regular_wakeon") ;;
+        *) log_error "Invalid selection."; exit 1 ;;
     esac
 }
 
 select_submenu_b() {
     step_header "Option B: Server/Plex Selection"
-    echo "Available Scripts:"
-    echo "1. updateandclean (Standard Daily Maintenance)"
-    echo "2. updateandclean-PLEX (Plex Specific Maintenance)"
-    echo "3. INSTALL BOTH (Installs both scripts above)"
+    echo "1. updateandclean (Standard)"
+    echo "2. updateandclean-PLEX (Plex)"
+    echo "3. INSTALL BOTH"
     echo ""
     read -p "Enter choice (1, 2, or 3): " CHOICE
-
     case $CHOICE in
-        1)
-            SCRIPT_NAMES=("updateandclean")
-            URLs=("$URL_REGULAR")
-            CRON_TYPES=("regular")
-            ;;
-        2)
-            SCRIPT_NAMES=("updateandclean-PLEX")
-            URLs=("$URL_PLEX")
-            CRON_TYPES=("plex")
-            ;;
-        3)
-            SCRIPT_NAMES=("updateandclean" "updateandclean-PLEX")
-            URLs=("$URL_REGULAR" "$URL_PLEX")
-            CRON_TYPES=("regular" "plex")
-            log_msg "You selected to install BOTH scripts."
-            ;;
-        *)
-            log_error "Invalid selection."
-            exit 1
-            ;;
+        1) SCRIPT_NAMES=("updateandclean"); URLs=("$URL_REGULAR"); CRON_TYPES=("regular") ;;
+        2) SCRIPT_NAMES=("updateandclean-PLEX"); URLs=("$URL_PLEX"); CRON_TYPES=("plex") ;;
+        3) SCRIPT_NAMES=("updateandclean" "updateandclean-PLEX"); URLs=("$URL_REGULAR" "$URL_PLEX"); CRON_TYPES=("regular" "plex") ;;
+        *) log_error "Invalid selection."; exit 1 ;;
     esac
 }
 
-# --- Step 3: Download & Install (Multi-Script Support) ---
+# --- Step 3: Download & Install Scripts ---
 install_scripts() {
     step_header "Downloading and Installing Script(s)"
-    
     local TOTAL=${#SCRIPT_NAMES[@]}
-    local CURRENT=0
-
-    # Check Internet connectivity
+    
     log_msg "Checking internet connectivity..."
     if ! ping -c 3 -W 5 github.com &>/dev/null; then
-        log_error "No internet connection detected. Cannot download scripts."
+        log_error "No internet connection detected."
         exit 1
     fi
 
     for i in "${!SCRIPT_NAMES[@]}"; do
-        CURRENT=$((CURRENT + 1))
         local NAME="${SCRIPT_NAMES[$i]}"
         local URL="${URLS[$i]}"
         local DEST="$INSTALL_PATH/$NAME"
+        log_msg "--- Installing $NAME ---"
         
-        log_msg "--- Installing Script $CURRENT of $TOTAL: $NAME ---"
-        
-        # Backup existing file
         if [ -f "$DEST" ]; then
-            log_msg "Existing installation found. Backing up to ${DEST}.bak.$(date +%s)..."
             mv "$DEST" "${DEST}.bak.$(date +%s)"
+            log_msg "Backed up existing file."
         fi
 
-        log_msg "Downloading $NAME from GitHub..."
         if ! curl -sSL "$URL" -o "$DEST"; then
-            log_error "Failed to download script from $URL"
+            log_error "Failed to download $NAME."
             continue
         fi
 
-        # Validate Content
         if ! head -n 1 "$DEST" | grep -q "^#!"; then
-            log_error "Downloaded content is not a valid script. Skipping."
+            log_error "Invalid script downloaded ($NAME). Skipping."
             rm -f "$DEST"
             continue
         fi
 
         chmod +x "$DEST"
-        log_msg "Script installed to: $DEST"
-        log_msg "Made executable."
+        log_msg "$NAME installed."
     done
-    
     DEST_PATH="$INSTALL_PATH/${SCRIPT_NAMES[0]}"
-    log_msg "All script downloads completed."
 }
 
 # --- Step 4: Cron Configuration ---
 setup_cron() {
     step_header "Configuring Cron Job(s)"
-    
-    log_msg "Cleaning up old UDC cron jobs..."
     crontab -l 2>/dev/null | grep -v "updateandclean" | grep -v "updateandcleandaily" | grep -v "updateandclean-PLEX" | crontab - || true
     
     local TIME="02:00"
     local HAS_CRON=false
-
     for i in "${!SCRIPT_NAMES[@]}"; do
         local NAME="${SCRIPT_NAMES[$i]}"
         local TYPE="${CRON_TYPES[$i]}"
         local COMMAND="$INSTALL_PATH/$NAME >> $UDC_DIR/cron.log 2>&1"
         
         if [ "$TYPE" != "regular" ] && [ "$TYPE" != "regular_wakeon" ]; then
-            log_msg "Adding cron job for $NAME at $TIME every day..."
             (crontab -l 2>/dev/null | grep -v "$NAME"; echo "$TIME * * * * $COMMAND") | crontab -
             HAS_CRON=true
-        else
-            log_msg "No auto-cron for $NAME (Manual mode)."
         fi
     done
     
     if [ "$HAS_CRON" = true ]; then
-        log_msg "Cron job(s) added successfully."
+        log_msg "Cron jobs added."
     fi
     
-    for TYPE in "${CRON_TYPES[@]}"; do
-        if [ "$TYPE" == "daily_shutdown" ]; then
-            echo ""
-            echo "⚠️  IMPORTANT REMINDER ⚠️"
-            echo "You have 'updateandcleandaily' installed. Set BIOS RTC Alarm/Wake Time to: ** 01:45 AM **"
-            echo ""
-            break
-        fi
-    done
+    if [[ " ${CRON_TYPES[*]} " =~ " daily_shutdown " ]]; then
+        echo ""
+        echo "⚠️  IMPORTANT REMINDER ⚠️"
+        echo "Set BIOS RTC Alarm/Wake Time to: ** 01:45 AM **"
+        echo ""
+    fi
 }
 
 # --- Step 5: Optional Execution ---
 run_now() {
     step_header "Run Script Now?"
-    
-    echo "Available installed scripts:"
-    for i in "${!SCRIPT_NAMES[@]}"; do
-        echo "  $((i+1)). ${SCRIPT_NAMES[$i]}"
-    done
-    echo "  0. Skip (do not run now)"
+    echo "Available scripts:"
+    for i in "${!SCRIPT_NAMES[@]}"; do echo "  $((i+1)). ${SCRIPT_NAMES[$i]}"; done
+    echo "  0. Skip"
     echo ""
     
     if [[ " ${SCRIPT_NAMES[*]} " =~ " updateandcleandaily " ]]; then
-        echo "⛔ SAFETY WARNING ⛔"
-        echo "One of your scripts ('updateandcleandaily') WILL SHUT DOWN your computer."
-        echo ""
-        read -p "Do you want to run updateandcleandaily now? Type 'YES' to confirm: " CONFIRM
+        echo "⛔ SAFETY: Running 'updateandcleandaily' will SHUT DOWN this machine."
+        read -p "Type 'YES' to confirm: " CONFIRM
         if [[ "$CONFIRM" == "YES" ]]; then
-            log_msg "Starting updateandcleandaily..."
             "$INSTALL_PATH/updateandcleandaily"
-            EXIT_CODE=$?
-            if [ $EXIT_CODE -eq 0 ]; then
-                log_msg "updateandcleandaily launched successfully."
-            else
-                log_error "updateandcleandaily exited with code $EXIT_CODE."
-            fi
-            log_msg "Exiting setup script after shutdown launch."
             exit 0
-        else
-            log_msg "Skipping updateandcleandaily execution."
         fi
     fi
     
-    if [ ${#SCRIPT_NAMES[@]} -gt 0 ]; then
-        read -p "Do you want to run any other installed script immediately? (y/n): " RUN_NOW
-        if [[ "$RUN_NOW" =~ ^[Yy]$ ]]; then
-            for NAME in "${SCRIPT_NAMES[@]}"; do
-                if [ "$NAME" != "updateandcleandaily" ]; then
-                    log_msg "Starting $NAME..."
-                    "$INSTALL_PATH/$NAME"
-                    EXIT_CODE=$?
-                    if [ $EXIT_CODE -eq 0 ]; then
-                        log_msg "$NAME completed successfully."
-                    else
-                        log_error "$NAME exited with code $EXIT_CODE."
-                    fi
-                fi
-            done
-        else
-            log_msg "Skipping immediate execution."
-        fi
+    read -p "Run other scripts now? (y/n): " RUN_NOW
+    if [[ "$RUN_NOW" =~ ^[Yy]$ ]]; then
+        for NAME in "${SCRIPT_NAMES[@]}"; do
+            if [ "$NAME" != "updateandcleandaily" ]; then
+                "$INSTALL_PATH/$NAME"
+            fi
+        done
     fi
 }
 
 # --- Final Summary ---
 final_report() {
     step_header "Setup Complete"
-    
-    log_msg "Checking system timezone..."
     CURRENT_TZ=$(timedatectl 2>/dev/null | grep "Time zone" | awk '{print $3}')
     if [[ "$CURRENT_TZ" == "UTC" ]]; then
-        log_msg "⚠️ WARNING: System timezone is UTC."
-        echo "   Your 2 AM cron jobs will run at 2 AM UTC, NOT your local time."
-        echo "   To fix: timedatectl set-timezone <Your_Timezone>"
-        echo ""
+        echo "⚠️ WARNING: System timezone is UTC. Cron runs at UTC time."
     fi
     
-    echo ""
-    echo "Summary of actions performed:"
-    echo "1. ✅ System directories created ($LOG_BASE)."
-    echo "2. ✅ Tools installed (ClamAV, RKhunter, etc.)."
-    echo "3. ✅ Script(s) installed to $INSTALL_PATH:"
-    for NAME in "${SCRIPT_NAMES[@]}"; do
-        echo "     - $NAME"
-    done
-    
-    for TYPE in "${CRON_TYPES[@]}"; do
-        if [ "$TYPE" == "daily_shutdown" ] || [ "$TYPE" == "plex" ]; then
-            echo "4. ✅ Cron job(s) scheduled for 02:00 AM daily."
-            break
-        fi
-    done
-    
-    if [[ " ${CRON_TYPES[*]} " =~ " daily_shutdown " ]]; then
-        echo "5. ⚠️  REMEMBER: Set BIOS Wake-up time to 01:45 AM!"
-    fi
-    
-    echo ""
-    echo "📝 Full setup log saved to: $SETUP_LOG"
-    echo "Logs stored in: $LOG_BASE"
-    echo "To run manually anytime: sudo $INSTALL_PATH/<script_name>"
-    echo ""
-    echo "🎉 All tasks completed successfully!"
-    echo ""
+    echo "Scripts installed: ${SCRIPT_NAMES[*]}"
+    echo "Logs: $LOG_BASE"
+    echo "🎉 Setup finished!"
 }
 
-# --- Cleanup Old Backups ---
 cleanup_old_backups() {
-    log_msg "Cleaning up old script backups (>30 days)..."
     find /usr/bin -maxdepth 1 -name "*.bak.*" -mtime +30 -delete 2>/dev/null || true
-    log_msg "Old backup cleanup complete."
 }
 
-# --- Main Execution Flow ---
+# --- Main Flow ---
 check_root
-install_minimal_deps  # FIX: Install curl/wget FIRST
-check_self_update     # NOW SAFE to use curl
+install_minimal_deps
+check_self_update  # <-- NOW REPLACES THE CURRENT FILE PATH
 prepare_system
 select_script
 install_scripts
